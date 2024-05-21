@@ -7,6 +7,8 @@ CFLAGS += -Iinclude
 # define tools
 $(eval $(call def_tool,RCLID,rclid,serv.c))
 $(eval $(call def_tool,RUNSERV,runserv))
+$(eval $(call def_tool,TESTSHELL,testshell,shell.c))
+$(eval $(call def_tool,TESTVCON,testvcon,shell.c vcon.c))
 
 # ----- tools -----
 .PHONY: all $(TOOLS)
@@ -22,6 +24,8 @@ test: dirs $(patsubst %,test-%,$(TOOLS))
 # --- tools ---
 $(eval $(call add_tool,RCLID,rclid))
 $(eval $(call add_tool,RUNSERV,runserv))
+$(eval $(call add_tool,TESTSHELL,testshell))
+$(eval $(call add_tool,TESTVCON,testvcon))
 
 # --- compile ---
 $(OBJ_PATH)/%.o: %.c
