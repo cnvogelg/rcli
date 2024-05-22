@@ -17,7 +17,7 @@ extern struct ExecBase *SysBase;
 struct DosLibrary *DOSBase;
 int num_read = 0;
 
-static LONG read_func(APTR data, LONG size, APTR user_data)
+static LONG read_func(APTR data, LONG size)
 {
   LONG ret_size = 0;
 
@@ -34,14 +34,6 @@ static LONG read_func(APTR data, LONG size, APTR user_data)
   return ret_size;
 }
 
-static LONG write_func(APTR data, LONG size, APTR user_data)
-{
-  PutStr("Data: '");
-  Write(Output(), data, size);
-  PutStr("'\n");
-  return size;
-}
-
 int testvcon(void)
 {
   shell_handle_t *sh;
@@ -55,7 +47,7 @@ int testvcon(void)
   }
 
   PutStr("Setup shell\n");
-  BPTR fh = vcon_get_fh(sc);
+  BPTR fh = vcon_create_fh(sc);
   sh = shell_init(fh, ZERO, NULL, 8192);
   if(sh == NULL) {
     PutStr("ERROR setting up shell...\n");
@@ -75,16 +67,23 @@ int testvcon(void)
       ULONG status = vcon_handle(sc);
       Printf("-> status=%lx\n", status);
       if(status & VCON_HANDLE_READ) {
-        LONG size = vcon_read_requested(sc);
+        APTR buf = NULL;
+        LONG size = vcon_read_begin(sc, &buf);
         Printf("READ size=%ld\n", size);
-        vcon_read(sc, read_func, NULL);
+        size = read_func(buf,size);
+        vcon_read_end(sc, size);
         PutStr("READ done.\n");
       }
       if(status & VCON_HANDLE_WRITE) {
-        LONG size = vcon_write_pending(sc);
+        APTR buf = NULL;
+        LONG size = vcon_write_begin(sc, &buf);;
         Printf("WRITE size=%ld\n", size);
-        vcon_write(sc, write_func, NULL);
+        Write(Output(), buf, size);
+        vcon_write_end(sc, size);
         PutStr("WRITE done.\n");
+      }
+      if(status & VCON_HANDLE_CLOSE) {
+        PutStr("CLOSEd console\n");
       }
     }
     if(got_mask & shell_mask) {

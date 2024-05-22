@@ -10,12 +10,12 @@
 struct vcon_handle;
 typedef struct vcon_handle vcon_handle_t;
 
-typedef LONG (*vcon_io_func_t)(APTR data, LONG size, APTR user_data);
-
 vcon_handle_t *vcon_init(void);
 void vcon_exit(vcon_handle_t *sh);
 
-BPTR  vcon_get_fh(vcon_handle_t *sh);
+/* create a new file handle for vcon. has to be closed on your own! */
+BPTR  vcon_create_fh(vcon_handle_t *sh);
+
 LONG  vcon_get_buffer_mode(vcon_handle_t *sh);
 ULONG vcon_get_sigmask(vcon_handle_t *sh);
 
@@ -25,23 +25,17 @@ BOOL  vcon_signal(vcon_handle_t *sh, ULONG sig_mask);
 /* process the signals the vcon handles. return VCON_HANDLE_xx */
 ULONG vcon_handle(vcon_handle_t *sh);
 
-/* is something to read pending and how much? */
-LONG vcon_read_requested(vcon_handle_t *sh);
+/* something to read. return size and buffer */
+LONG vcon_read_begin(vcon_handle_t *sh, APTR *ret_buf);
 
-/* let the shell read from my buffer.
-   return number of bytes actually consumed
-   return -1 if read not possible, e.g. no read requested
- */
-LONG vcon_read(vcon_handle_t *sh, vcon_io_func_t read_func, APTR user_data);
+/* done reading. set the total number of bytes read */
+void vcon_read_end(vcon_handle_t *sh, LONG size);
 
 /* is something to write pending and how much? */
-LONG vcon_write_pending(vcon_handle_t *sh);
+LONG vcon_write_begin(vcon_handle_t *sh, APTR *ret_buf);
 
-/* let the shell write.
-   return number of bytes actually consumed
-   return -1 if write not possible, e.g. no write pending
- */
-LONG vcon_write(vcon_handle_t *sh, vcon_io_func_t write_func, APTR user_data);
+/* done writing. set the toal number of bytes written */
+void vcon_write_end(vcon_handle_t *sh, LONG size);
 
 /* drop all pending io reqs */
 void vcon_drop(vcon_handle_t *sh);
