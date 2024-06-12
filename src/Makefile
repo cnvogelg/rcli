@@ -8,7 +8,9 @@ CFLAGS += -Iinclude
 $(eval $(call def_tool,RCLID,rclid,serv.c))
 $(eval $(call def_tool,RUNSERV,runserv))
 $(eval $(call def_tool,TESTSHELL,testshell,shell.c))
-$(eval $(call def_tool,TESTVCON,testvcon,shell.c vcon.c))
+$(eval $(call def_tool,TESTVCON,testvcon,shell.c vcon.c timer.c))
+$(eval $(call def_tool,TESTTIMER,testtimer,timer.c))
+$(eval $(call def_tool,TESTCLIENT,testclient))
 
 # ----- tools -----
 .PHONY: all $(TOOLS)
@@ -26,6 +28,8 @@ $(eval $(call add_tool,RCLID,rclid))
 $(eval $(call add_tool,RUNSERV,runserv))
 $(eval $(call add_tool,TESTSHELL,testshell))
 $(eval $(call add_tool,TESTVCON,testvcon))
+$(eval $(call add_tool,TESTTIMER,testtimer))
+$(eval $(call add_tool,TESTCLIENT,testclient))
 
 # --- compile ---
 $(OBJ_PATH)/%.o: %.c

@@ -15,29 +15,12 @@
 /* lib bases */
 extern struct ExecBase *SysBase;
 struct DosLibrary *DOSBase;
-int num_read = 0;
-
-static LONG read_func(APTR data, LONG size)
-{
-  LONG ret_size = 0;
-
-  if(num_read == 0) {
-    strcpy(data, "list\n");
-    ret_size = 5;
-  }
-  if(num_read == 1) {
-    strcpy(data, "endcli\n");
-    ret_size = 7;
-  }
-
-  num_read++;
-  return ret_size;
-}
 
 int testvcon(void)
 {
   shell_handle_t *sh;
   vcon_handle_t *sc;
+  vcon_buf_t buffer;
 
   PutStr("Setup shell console\n");
   sc = vcon_init();
@@ -64,26 +47,39 @@ int testvcon(void)
     ULONG got_mask = Wait(masks);
     if(got_mask & con_mask) {
       PutStr("handle console\n");
-      ULONG status = vcon_handle(sc);
+      ULONG status = vcon_handle_sigmask(sc, got_mask & con_mask);
       Printf("-> status=%lx\n", status);
       if(status & VCON_HANDLE_READ) {
-        APTR buf = NULL;
-        LONG size = vcon_read_begin(sc, &buf);
-        Printf("READ size=%ld\n", size);
-        size = read_func(buf,size);
-        vcon_read_end(sc, size);
-        PutStr("READ done.\n");
+        LONG size = vcon_read_begin(sc, &buffer);
+        Printf("VREAD size=%ld\n", buffer.size);
+        //read_func(&buffer);
+        buffer.size = Read(Input(), buffer.buffer, buffer.size);
+        vcon_read_end(sc, &buffer);
+        Printf("VREAD done. size=%ld\n", buffer.size);
       }
       if(status & VCON_HANDLE_WRITE) {
         APTR buf = NULL;
-        LONG size = vcon_write_begin(sc, &buf);;
-        Printf("WRITE size=%ld\n", size);
-        Write(Output(), buf, size);
-        vcon_write_end(sc, size);
-        PutStr("WRITE done.\n");
+        LONG size = vcon_write_begin(sc, &buffer);;
+        Printf("VWRITE size=%ld\n", buffer.size);
+        PutStr("VDATA[");
+        FWrite(Output(), buffer.buffer, buffer.size, 1);
+        PutStr("]\n");
+        vcon_write_end(sc, &buffer);
+        PutStr("VWRITE done.\n");
+      }
+      if(status & VCON_HANDLE_WAIT_CHAR) {
+        ULONG wait_s = 0, wait_us = 0;
+        vcon_waitchar_get_wait_time(sc, &wait_s, &wait_us);
+        ULONG total = wait_s * 1000000UL + wait_us;
+        Printf("VWAITCHAR: s=%ld us=%ld -> %ld", wait_s, wait_us, total);
+        BOOL ok = WaitForChar(Input(), total);
+        if(ok) {
+          PutStr("REPORT!\n");
+          vcon_waitchar_report(sc);
+        }
       }
       if(status & VCON_HANDLE_CLOSE) {
-        PutStr("CLOSEd console\n");
+        PutStr("VCLOSED console\n");
       }
     }
     if(got_mask & shell_mask) {
