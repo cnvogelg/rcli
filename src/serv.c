@@ -67,7 +67,7 @@ int rclid(void)
     return RETURN_FAIL;
   }
 
-  PutStr("service ready.\n");
+  PutStr("rclid service ready.\n");
 
   // make socket non blocking
   ULONG yes=TRUE;
@@ -76,7 +76,7 @@ int rclid(void)
   serv_main(socket);
 
   CloseSocket(socket);
-  PutStr("done.\n");
+  PutStr("rclid service done.\n");
   return RETURN_OK;
 }
 

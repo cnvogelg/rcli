@@ -5,7 +5,7 @@ include $(SCRIPT_DIR)/define.mk
 CFLAGS += -Iinclude
 
 # define tools
-$(eval $(call def_tool,RCLID,rclid,serv.c))
+$(eval $(call def_tool,RCLID,rclid,serv.c vcon.c timer.c shell.c))
 $(eval $(call def_tool,RUNSERV,runserv))
 $(eval $(call def_tool,TESTSHELL,testshell,shell.c))
 $(eval $(call def_tool,TESTVCON,testvcon,shell.c vcon.c timer.c))

@@ -53,7 +53,7 @@ int testvcon(void)
         LONG size = vcon_read_begin(sc, &buffer);
         Printf("VREAD size=%ld\n", buffer.size);
         //read_func(&buffer);
-        buffer.size = Read(Input(), buffer.buffer, buffer.size);
+        buffer.size = Read(Input(), buffer.data, buffer.size);
         vcon_read_end(sc, &buffer);
         Printf("VREAD done. size=%ld\n", buffer.size);
       }
@@ -62,7 +62,7 @@ int testvcon(void)
         LONG size = vcon_write_begin(sc, &buffer);;
         Printf("VWRITE size=%ld\n", buffer.size);
         PutStr("VDATA[");
-        FWrite(Output(), buffer.buffer, buffer.size, 1);
+        FWrite(Output(), buffer.data, buffer.size, 1);
         PutStr("]\n");
         vcon_write_end(sc, &buffer);
         PutStr("VWRITE done.\n");

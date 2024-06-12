@@ -19,7 +19,6 @@
 struct vcon_handle {
   struct MsgPort          *msg_port;
   struct MsgPort          *signal_port;
-  struct DosPacket       *head_pkt;
   timer_handle_t         *timer;
   struct List             rw_list;
   ULONG                   sigmask_port;
@@ -218,18 +217,25 @@ static ULONG handle_pkt(vcon_handle_t *sh, struct Message *msg)
   return flags;
 }
 
+static struct DosPacket *get_first_rw_pkt(vcon_handle_t *sh)
+{
+  /* what's next on rw list? */
+  struct Message *msg = (struct Message *)GetHead(&sh->rw_list);
+  if(msg != NULL) {
+    struct DosPacket *pkt = msg_to_pkt(msg);
+    return pkt;
+  } else {
+    return NULL;
+  }
+}
+
 static ULONG update_rw_flags(vcon_handle_t *sh)
 {
   ULONG flags = 0;
 
   /* what's next on rw list? */
-  sh->head_pkt = NULL;
-  struct Message *msg = (struct Message *)GetHead(&sh->rw_list);
-  if(msg != NULL) {
-    struct DosPacket *pkt = msg_to_pkt(msg);
-    /* update head packet */
-    sh->head_pkt = pkt;
-
+  struct DosPacket *pkt = get_first_rw_pkt(sh);
+  if(pkt != NULL) {
     LONG type = pkt->dp_Type;
     LOG(("update rw: Head packet type: %ld\n", type));
     if(type == ACTION_READ) {
@@ -312,12 +318,13 @@ BOOL vcon_read_begin(vcon_handle_t *sh, vcon_buf_t *buf)
   if((sh->cur_flags & VCON_HANDLE_READ) == 0) {
     return FALSE;
   }
-  if(sh->head_pkt == NULL) {
+
+  struct DosPacket *pkt = get_first_rw_pkt(sh);
+  if(pkt == NULL) {
     return FALSE;
   }
 
-  struct DosPacket *pkt = sh->head_pkt;
-  buf->buffer = (APTR)pkt->dp_Arg2;
+  buf->data = (APTR)pkt->dp_Arg2;
   buf->size = pkt->dp_Arg3;
   buf->private = pkt;
 
@@ -329,10 +336,10 @@ void vcon_read_end(vcon_handle_t *sh, vcon_buf_t *buf)
   /* remove from rw list */
   RemHead(&sh->rw_list);
 
-  /* reply dos packet */
-  ReplyPkt(sh->head_pkt, buf->size, 0);
+  struct DosPacket *pkt = (struct DosPacket *)buf->private;
 
-  sh->head_pkt = NULL;
+  /* reply dos packet */
+  ReplyPkt(pkt, buf->size, 0);
 }
 
 BOOL vcon_write_begin(vcon_handle_t *sh, vcon_buf_t *buf)
@@ -341,12 +348,13 @@ BOOL vcon_write_begin(vcon_handle_t *sh, vcon_buf_t *buf)
   if((sh->cur_flags & VCON_HANDLE_WRITE) == 0) {
     return FALSE;
   }
-  if(sh->head_pkt == NULL) {
+
+  struct DosPacket *pkt = get_first_rw_pkt(sh);
+  if(pkt == NULL) {
     return FALSE;
   }
 
-  struct DosPacket *pkt = sh->head_pkt;
-  buf->buffer = (APTR)pkt->dp_Arg2;
+  buf->data = (APTR)pkt->dp_Arg2;
   buf->size = pkt->dp_Arg3;
   buf->private = pkt;
 
@@ -358,10 +366,10 @@ void vcon_write_end(vcon_handle_t *sh, vcon_buf_t *buf)
   /* remove from rw list */
   RemHead(&sh->rw_list);
 
-  /* reply dos packet */
-  ReplyPkt(sh->head_pkt, buf->size, 0);
+  struct DosPacket *pkt = (struct DosPacket *)buf->private;
 
-  sh->head_pkt = NULL;
+  /* reply dos packet */
+  ReplyPkt(pkt, buf->size, 0);
 }
 
 static void drop_rw_pkts(vcon_handle_t *sh)

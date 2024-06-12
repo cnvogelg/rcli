@@ -12,7 +12,7 @@ struct vcon_handle;
 typedef struct vcon_handle vcon_handle_t;
 
 struct vcon_buf {
-  APTR  buffer;
+  UBYTE *data;
   LONG  size;
   APTR  private;
 };
