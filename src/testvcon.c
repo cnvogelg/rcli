@@ -41,7 +41,9 @@ int testvcon(void)
   PutStr("Main loop...\n");
   ULONG shell_mask = shell_exit_mask(sh);
   ULONG con_mask = vcon_get_sigmask(sc);
-  ULONG masks = shell_mask | con_mask | SIGBREAKF_CTRL_C;
+  ULONG masks = shell_mask | con_mask |
+    SIGBREAKF_CTRL_C | SIGBREAKF_CTRL_D | SIGBREAKF_CTRL_E | SIGBREAKF_CTRL_F;
+  int ctrl_c_count = 0;
 
   while(TRUE) {
     ULONG got_mask = Wait(masks);
@@ -86,9 +88,28 @@ int testvcon(void)
       break;
     }
     if(got_mask & SIGBREAKF_CTRL_C) {
-      PutStr("*BREAK!\n");
-      vcon_drop(sc);
-      PutStr("dropped con!\n");
+      if(ctrl_c_count == 0) {
+        PutStr("Ctrl-C signal");
+        vcon_send_signal(sc, SIGBREAKF_CTRL_C);
+        ctrl_c_count++;
+      }
+      else {
+        PutStr("*BREAK!\n");
+        vcon_drop(sc);
+        PutStr("dropped con!\n");
+      }
+    }
+    if(got_mask & SIGBREAKF_CTRL_D) {
+      PutStr("Ctrl-D signal");
+      vcon_send_signal(sc, SIGBREAKF_CTRL_D);
+    }
+    if(got_mask & SIGBREAKF_CTRL_E) {
+      PutStr("Ctrl-E signal");
+      vcon_send_signal(sc, SIGBREAKF_CTRL_E);
+    }
+    if(got_mask & SIGBREAKF_CTRL_F) {
+      PutStr("Ctrl-F signal");
+      vcon_send_signal(sc, SIGBREAKF_CTRL_F);
     }
   }
 
