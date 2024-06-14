@@ -1,6 +1,8 @@
 #ifndef VCON
 #define VCON
 
+#include "buf.h"
+
 /* flags returned by vcon_handle() */
 #define VCON_HANDLE_READ       1 /* con likes to read something next */
 #define VCON_HANDLE_WRITE      2 /* con likes to write something next */
@@ -11,13 +13,6 @@
 
 struct vcon_handle;
 typedef struct vcon_handle vcon_handle_t;
-
-struct vcon_buf {
-  UBYTE *data;
-  LONG  size;
-  APTR  private;
-};
-typedef struct vcon_buf vcon_buf_t;
 
 vcon_handle_t *vcon_init(void);
 void vcon_exit(vcon_handle_t *sh);
@@ -38,16 +33,16 @@ BOOL  vcon_send_signal(vcon_handle_t *sh, ULONG sig_mask);
 ULONG vcon_handle_sigmask(vcon_handle_t *sh, ULONG sig_mask);
 
 /* something to read. return size and buffer */
-BOOL vcon_read_begin(vcon_handle_t *sh, vcon_buf_t *buf);
+BOOL vcon_read_begin(vcon_handle_t *sh, buf_t *buf);
 
 /* done reading. set the total number of bytes read or -1 for error */
-void vcon_read_end(vcon_handle_t *sh, vcon_buf_t *buf, LONG actual_size);
+void vcon_read_end(vcon_handle_t *sh, buf_t *buf, LONG actual_size);
 
 /* is something to write pending and how much? */
-BOOL vcon_write_begin(vcon_handle_t *sh, vcon_buf_t *buf);
+BOOL vcon_write_begin(vcon_handle_t *sh, buf_t *buf);
 
 /* done writing. set the toal number of bytes written */
-void vcon_write_end(vcon_handle_t *sh, vcon_buf_t *buf);
+void vcon_write_end(vcon_handle_t *sh, buf_t *buf);
 
 /* get waiting time of first one waiting */
 BOOL vcon_wait_char_get_wait_time(vcon_handle_t *sh, ULONG *wait_s, ULONG *wait_us);

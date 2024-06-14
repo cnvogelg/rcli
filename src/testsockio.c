@@ -13,7 +13,7 @@ static UBYTE buffer[1024];
 
 static void main_loop(sockio_handle_t *sio)
 {
-  sockio_buf_t buf = {
+  buf_t buf = {
     .data = buffer,
     .size = 1024
   };

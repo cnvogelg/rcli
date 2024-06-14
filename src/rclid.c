@@ -31,11 +31,8 @@ struct serv_data {
   BOOL             rx_pending;
   BOOL             tx_pending;
 
-  vcon_buf_t       rx_vbuf;
-  vcon_buf_t       tx_vbuf;
-
-  sockio_buf_t     rx_sbuf;
-  sockio_buf_t     tx_sbuf;
+  buf_t            rx_buf;
+  buf_t            tx_buf;
 };
 typedef struct serv_data serv_data_t;
 
@@ -116,16 +113,14 @@ static int handle_vcon(serv_data_t *sd, ULONG got_con_mask)
     // not pending?
     if(!sd->rx_pending) {
       // start reading into rx buf
-      BOOL ok = vcon_read_begin(sd->vcon, &sd->rx_vbuf);
+      BOOL ok = vcon_read_begin(sd->vcon, &sd->rx_buf);
       if(!ok) {
         error_out(sd->socket, "ERROR: vcon_read_begin!\n");
         return HANDLE_ERROR;
       }
 
       // start sockio read
-      sd->rx_sbuf.data = sd->rx_vbuf.data;
-      sd->rx_sbuf.size = sd->rx_vbuf.size;
-      ok = sockio_rx_begin(sd->sockio, &sd->rx_sbuf, 1); // at least 1 char
+      ok = sockio_rx_begin(sd->sockio, &sd->rx_buf, 1); // at least 1 char
       if(!ok) {
         error_out(sd->socket, "ERROR: sockio_rx_begin!\n");
         return HANDLE_ERROR;
@@ -133,7 +128,7 @@ static int handle_vcon(serv_data_t *sd, ULONG got_con_mask)
 
       sd->rx_pending = TRUE;
 
-      LOG(("VREAD: pending rx: size=%ld\n", sd->rx_sbuf.size));
+      LOG(("VREAD: pending rx: size=%ld\n", sd->rx_buf.size));
     } else {
       LOG(("VREAD: already rx pending!\n"));
     }
@@ -144,16 +139,14 @@ static int handle_vcon(serv_data_t *sd, ULONG got_con_mask)
     // not pending?
     if(!sd->tx_pending) {
       // start writing into tx_buf
-      BOOL ok = vcon_write_begin(sd->vcon, &sd->tx_vbuf);
+      BOOL ok = vcon_write_begin(sd->vcon, &sd->tx_buf);
       if(!ok) {
         error_out(sd->socket, "ERROR: vcon_write_begin!\n");
         return HANDLE_ERROR;
       }
 
       // start sockio write
-      sd->tx_sbuf.data = sd->tx_vbuf.data;
-      sd->tx_sbuf.size = sd->tx_vbuf.size;
-      ok = sockio_tx_begin(sd->sockio, &sd->tx_sbuf);
+      ok = sockio_tx_begin(sd->sockio, &sd->tx_buf);
       if(!ok) {
         error_out(sd->socket, "ERROR: sockio_tx_begin!\n");
         return HANDLE_ERROR;
@@ -161,7 +154,7 @@ static int handle_vcon(serv_data_t *sd, ULONG got_con_mask)
 
       sd->tx_pending = TRUE;
 
-      LOG(("VWRITE: pending tx: size=%ld\n", sd->tx_sbuf.size));
+      LOG(("VWRITE: pending tx: size=%ld\n", sd->tx_buf.size));
     } else {
       LOG(("VWRITE: already tx pending!\n"));
     }
@@ -234,7 +227,7 @@ static BOOL main_loop(serv_data_t *sd)
       LOG(("SOCKIO: RX done=%ld\n", rx_size));
 
       // submit to vcon
-      vcon_read_end(sd->vcon, &sd->rx_vbuf, rx_size);
+      vcon_read_end(sd->vcon, &sd->rx_buf, rx_size);
 
       sd->rx_pending = FALSE;
     }
@@ -242,10 +235,10 @@ static BOOL main_loop(serv_data_t *sd)
     // sockio tx req is done
     if(flags & SOCKIO_HANDLE_TX_DONE) {
       sockio_tx_end(sd->sockio);
-      LOG(("SOCKIO: TX done=%ld\n", sd->tx_vbuf.size));
+      LOG(("SOCKIO: TX done=%ld\n", sd->tx_buf.size));
 
       // submit to vcon
-      vcon_write_end(sd->vcon, &sd->tx_vbuf);
+      vcon_write_end(sd->vcon, &sd->tx_buf);
 
       sd->tx_pending = FALSE;
     }

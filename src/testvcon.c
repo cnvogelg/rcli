@@ -20,7 +20,7 @@ int testvcon(void)
 {
   shell_handle_t *sh;
   vcon_handle_t *sc;
-  vcon_buf_t buffer;
+  buf_t buffer;
 
   PutStr("Setup shell console\n");
   sc = vcon_init();

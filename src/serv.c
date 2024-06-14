@@ -6,8 +6,6 @@
 #include <proto/socket.h>
 #include <clib/alib_protos.h>
 
-#include <sys/ioctl.h>
-
 #include "serv.h"
 
 /* lib bases */
@@ -55,7 +53,7 @@ static int get_socket(void)
     struct DaemonMessage *dm = (struct DaemonMessage *)me->pr_ExitData;
     if(dm == NULL) {
       Printf("failed getting daemon msg!\n");
-      return RETURN_FAIL;
+      return -1;
     }
 
     socket = ObtainSocket(dm->dm_ID, dm->dm_Family, dm->dm_Type, 0);
@@ -66,10 +64,6 @@ static int get_socket(void)
     PutStr("Failed to obtain socket!\n");
     return -1;
   }
-
-  // make socket non blocking
-  ULONG yes=TRUE;
-  IoctlSocket(socket, FIONBIO, (char *)&yes);
 
   return socket;
 }
@@ -102,6 +96,9 @@ int serv_init(void)
   }
 
   int socket = get_socket();
+  if(socket == -1) {
+    return -1;
+  }
 
   /* free args */
   FreeArgs(args);

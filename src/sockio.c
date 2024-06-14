@@ -3,14 +3,17 @@
 #include <proto/exec.h>
 #include <proto/socket.h>
 
+#include <sys/ioctl.h>
+#include <netinet/tcp.h>
+
 //#define LOG_ENABLED
 #include "log.h"
 #include "sockio.h"
 
 struct sockio_handle {
   int socket;
-  sockio_buf_t *rx_buffer;
-  sockio_buf_t *tx_buffer;
+  buf_t *rx_buffer;
+  buf_t *tx_buffer;
   ULONG rx_min_size;
   ULONG rx_actual;
   ULONG tx_actual;
@@ -26,6 +29,13 @@ sockio_handle_t *sockio_init(int socket)
   }
 
   sio->socket = socket;
+
+  // make socket non blocking
+  ULONG yes=TRUE;
+  IoctlSocket(socket, FIONBIO, (char *)&yes);
+
+  // no delay
+  setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(ULONG));
 
   return sio;
 }
@@ -44,8 +54,8 @@ ULONG sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
 {
   fd_set rx_fds;
   fd_set tx_fds;
-  sockio_buf_t *rx_buf = sio->rx_buffer;
-  sockio_buf_t *tx_buf = sio->tx_buffer;
+  buf_t *rx_buf = sio->rx_buffer;
+  buf_t *tx_buf = sio->tx_buffer;
 
   // prepare select
 
@@ -173,7 +183,7 @@ ULONG sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
 }
 
 /* submit buffer with given capacity */
-BOOL sockio_rx_begin(sockio_handle_t *sio, sockio_buf_t *buf, ULONG min_size)
+BOOL sockio_rx_begin(sockio_handle_t *sio, buf_t *buf, ULONG min_size)
 {
   // already a buffer pending?
   if(sio->rx_buffer != NULL) {
@@ -209,7 +219,7 @@ ULONG sockio_rx_end(sockio_handle_t *sio)
 
 /* --- TX --- */
 /* submit buffer with given size */
-BOOL sockio_tx_begin(sockio_handle_t *sio, sockio_buf_t *buf)
+BOOL sockio_tx_begin(sockio_handle_t *sio, buf_t *buf)
 {
   // already a buffer pending?
   if(sio->tx_buffer != NULL) {

@@ -20,6 +20,7 @@ struct vcon_handle {
   struct MsgPort          *msg_port;
   struct MsgPort          *signal_port;
   timer_handle_t         *timer;
+  struct DosPacket       *rw_pkt;
   struct List             rw_list;
   ULONG                   sigmask_port;
   ULONG                   open_cnt;
@@ -341,7 +342,7 @@ ULONG vcon_handle_sigmask(vcon_handle_t *sh, ULONG got_mask)
   return flags;
 }
 
-BOOL vcon_read_begin(vcon_handle_t *sh, vcon_buf_t *buf)
+BOOL vcon_read_begin(vcon_handle_t *sh, buf_t *buf)
 {
   /* no read pending? */
   if((sh->cur_flags & VCON_HANDLE_READ) == 0) {
@@ -355,23 +356,24 @@ BOOL vcon_read_begin(vcon_handle_t *sh, vcon_buf_t *buf)
 
   buf->data = (APTR)pkt->dp_Arg2;
   buf->size = pkt->dp_Arg3;
-  buf->private = pkt;
+
+  sh->rw_pkt = pkt;
 
   return TRUE;
 }
 
-void vcon_read_end(vcon_handle_t *sh, vcon_buf_t *buf, LONG actual_size)
+void vcon_read_end(vcon_handle_t *sh, buf_t *buf, LONG actual_size)
 {
   /* remove from rw list */
   RemHead(&sh->rw_list);
 
-  struct DosPacket *pkt = (struct DosPacket *)buf->private;
+  struct DosPacket *pkt = sh->rw_pkt;
 
   /* reply dos packet */
   ReplyPkt(pkt, actual_size, 0);
 }
 
-BOOL vcon_write_begin(vcon_handle_t *sh, vcon_buf_t *buf)
+BOOL vcon_write_begin(vcon_handle_t *sh, buf_t *buf)
 {
   /* no write pending? */
   if((sh->cur_flags & VCON_HANDLE_WRITE) == 0) {
@@ -382,20 +384,20 @@ BOOL vcon_write_begin(vcon_handle_t *sh, vcon_buf_t *buf)
   if(pkt == NULL) {
     return FALSE;
   }
+  sh->rw_pkt = pkt;
 
   buf->data = (APTR)pkt->dp_Arg2;
   buf->size = pkt->dp_Arg3;
-  buf->private = pkt;
 
   return TRUE;
 }
 
-void vcon_write_end(vcon_handle_t *sh, vcon_buf_t *buf)
+void vcon_write_end(vcon_handle_t *sh, buf_t *buf)
 {
   /* remove from rw list */
   RemHead(&sh->rw_list);
 
-  struct DosPacket *pkt = (struct DosPacket *)buf->private;
+  struct DosPacket *pkt = sh->rw_pkt;
 
   /* reply dos packet */
   ReplyPkt(pkt, buf->size, 0);
