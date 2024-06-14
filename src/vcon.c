@@ -25,6 +25,7 @@ struct vcon_handle {
   ULONG                   open_cnt;
   LONG                    buffer_mode;
   LONG                    cur_flags;
+  BOOL                    report_wait_end;
 };
 
 static struct DosPacket *msg_to_pkt(struct Message *Msg)
@@ -157,10 +158,25 @@ static ULONG handle_pkt(vcon_handle_t *sh, struct Message *msg)
       LOG(("SCREEN_MODE: mode=%ld\n", mode));
       sh->buffer_mode = mode;
       flags = VCON_HANDLE_MODE;
+      res1 = DOSTRUE;
+      res2 = 0;
       break;
     }
     case ACTION_DISK_INFO: {
       LOG(("DISK_INFO\n"));
+      struct InfoData *id = (struct InfoData *)BADDR((BPTR)pkt->dp_Arg1);
+      if(id != NULL) {
+        LOG(("id_DiskType %lx\n", id->id_DiskType));
+      }
+      ULONG mode;
+      if(sh->buffer_mode == 0) { // cooked
+        id->id_DiskType = 0x434f4e00; // CON\0
+      }
+      else {
+        id->id_DiskType = 0x52415700; // RAW\0
+      }
+      id->id_VolumeNode = 0; // no intuition window
+      id->id_InUse = 0; // no IOReq
       break;
     }
     case ACTION_WRITE: {
@@ -199,9 +215,13 @@ static ULONG handle_pkt(vcon_handle_t *sh, struct Message *msg)
         time_s = time_us / 1000000UL;
         time_us %= 1000000UL;
       }
-      LOG(("WAIT_CHAR: time s=%lu us=%lu\n", time_s, time_us));
+      BOOL first_wait = !timer_has_jobs(sh->timer);
+      LOG(("WAIT_CHAR: time s=%lu us=%lu first=%ld\n", time_s, time_us, (LONG)first_wait));
       timer_job_t *job = timer_start(sh->timer, time_s, time_us, pkt);
       do_reply = FALSE;
+      if(first_wait) {
+        flags |= VCON_HANDLE_WAIT_BEGIN;
+      }
       break;
     }
     default:
@@ -251,16 +271,6 @@ static ULONG update_rw_flags(vcon_handle_t *sh)
   return flags;
 }
 
-static ULONG update_wait_char_flag(vcon_handle_t *sh)
-{
-  timer_job_t *job = timer_get_first_job(sh->timer);
-  if(job != NULL) {
-    return VCON_HANDLE_WAIT_CHAR;
-  }
-
-  return 0;
-}
-
 BOOL vcon_send_signal(vcon_handle_t *sh, ULONG sig_mask)
 {
   if(sh->signal_port != NULL) {
@@ -281,7 +291,14 @@ ULONG vcon_handle_sigmask(vcon_handle_t *sh, ULONG got_mask)
   if(got_mask & sh->sigmask_port) {
     struct Message *msg;
     while((msg = GetMsg(sh->msg_port)) != NULL) {
-      flags |= handle_pkt(sh, msg);
+      ULONG add_flags = handle_pkt(sh, msg);
+      flags |= add_flags;
+
+      /* make sure that only one contribution of flags is returned.
+         otherwise multipe SCREEN_MODEs in a row are lost */
+      if(add_flags != 0) {
+        break;
+      }
     }
   }
 
@@ -301,11 +318,23 @@ ULONG vcon_handle_sigmask(vcon_handle_t *sh, ULONG got_mask)
 
       timer_stop(job);
     }
+
+    /* is last timer? */
+    BOOL no_timers = !timer_has_jobs(sh->timer);
+    if(no_timers) {
+      sh->report_wait_end = TRUE;
+    }
   }
 
   /* update the rw flags */
   flags |= update_rw_flags(sh);
-  flags |= update_wait_char_flag(sh);
+
+  /* report wait end */
+  if(sh->report_wait_end) {
+    sh->report_wait_end = FALSE;
+    flags |= VCON_HANDLE_WAIT_END;
+    LOG(("WAIT_CHAR: ending\n"));
+  }
 
   /* keep current flags for follow up commands */
   sh->cur_flags = flags;
@@ -331,7 +360,7 @@ BOOL vcon_read_begin(vcon_handle_t *sh, vcon_buf_t *buf)
   return TRUE;
 }
 
-void vcon_read_end(vcon_handle_t *sh, vcon_buf_t *buf)
+void vcon_read_end(vcon_handle_t *sh, vcon_buf_t *buf, LONG actual_size)
 {
   /* remove from rw list */
   RemHead(&sh->rw_list);
@@ -339,7 +368,7 @@ void vcon_read_end(vcon_handle_t *sh, vcon_buf_t *buf)
   struct DosPacket *pkt = (struct DosPacket *)buf->private;
 
   /* reply dos packet */
-  ReplyPkt(pkt, buf->size, 0);
+  ReplyPkt(pkt, actual_size, 0);
 }
 
 BOOL vcon_write_begin(vcon_handle_t *sh, vcon_buf_t *buf)
@@ -402,6 +431,7 @@ static void drop_rw_pkts(vcon_handle_t *sh)
 static void drop_waitchar_pkts(vcon_handle_t *sh)
 {
   timer_job_t *job = timer_get_first_job(sh->timer);
+  BOOL any = FALSE;
   while(job != NULL) {
     LOG(("DROP: timer job for pkt %lx\n"));
     timer_job_t *next_job = timer_get_next_job(job);
@@ -416,6 +446,11 @@ static void drop_waitchar_pkts(vcon_handle_t *sh)
     Remove((struct Node *)job);
 
     job = next_job;
+    any = TRUE;
+  }
+
+  if(any) {
+    sh->report_wait_end = TRUE;
   }
 }
 
@@ -425,7 +460,7 @@ void vcon_drop(vcon_handle_t *sh)
   drop_waitchar_pkts(sh);
 }
 
-BOOL vcon_waitchar_get_wait_time(vcon_handle_t *sh, ULONG *wait_s, ULONG *wait_us)
+BOOL vcon_wait_char_get_wait_time(vcon_handle_t *sh, ULONG *wait_s, ULONG *wait_us)
 {
   timer_job_t *job = timer_get_first_job(sh->timer);
   if(job == NULL) {
@@ -437,7 +472,7 @@ BOOL vcon_waitchar_get_wait_time(vcon_handle_t *sh, ULONG *wait_s, ULONG *wait_u
 }
 
 /* report a waiting key */
-BOOL vcon_waitchar_report(vcon_handle_t *sh)
+BOOL vcon_wait_char_report(vcon_handle_t *sh)
 {
   timer_job_t *job = timer_get_first_job(sh->timer);
   if(job == NULL) {
@@ -451,6 +486,12 @@ BOOL vcon_waitchar_report(vcon_handle_t *sh)
   LOG(("WAIT_CHAR: OK pkt=%lx\n", pkt));
 
   timer_stop(job);
+
+  /* report last one */
+  BOOL no_timers = !timer_has_jobs(sh->timer);
+  if(no_timers) {
+    sh->report_wait_end = TRUE;
+  }
 
   return TRUE;
 }

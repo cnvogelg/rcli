@@ -88,12 +88,12 @@ int runserv(ULONG port, const char *service, ULONG stack)
   FD_ZERO(&fds);
   FD_SET(listen_fd, &fds);
 
-  // open socket on any addr on given port
-  Printf("Waiting for connection on port %lu. Use Ctrl-C to abort.\n", port);
-
   // main loop
   BOOL stay = TRUE;
   while(stay) {
+
+    // open socket on any addr on given port
+    Printf("runserv: waiting for connection on port %lu. Use Ctrl-C to abort.\n", port);
 
     // wait/select for accept event or break
     LONG n = WaitSelect(listen_fd + 1, &fds, NULL, NULL, NULL, 0);
@@ -118,7 +118,7 @@ int runserv(ULONG port, const char *service, ULONG stack)
       PutStr("Invalid addr size!");
       break;
     }
-    Printf("client from %08lx:%ld connected\n",
+    Printf("runserv: client from %08lx:%ld connected\n",
         client_addr.sin_addr, client_addr.sin_port);
 
     // launch service
@@ -142,7 +142,7 @@ int runserv(ULONG port, const char *service, ULONG stack)
     struct Task *my_task = FindTask(NULL);
     sprintf(arg_line, "SOCKET %lu TASK %lu SIGNAL %lu",
         (ULONG)sock_id, (ULONG)my_task, (ULONG)sync_signal);
-    Printf("launching '%s' with args '%s' and stack %ld\n",
+    Printf("runserv: launching '%s' with args '%s' and stack %ld\n",
         service, arg_line, stack);
 
     // clear sync signal
@@ -163,11 +163,11 @@ int runserv(ULONG port, const char *service, ULONG stack)
       TAG_END);
 
     // wait for sync from service
-    PutStr("waiting for service to launch. Ctrl-C to break...\n");
+    PutStr("runserv: waiting for service to launch. Ctrl-C to break...\n");
     ULONG wait_mask = sync_mask | SIGBREAKF_CTRL_C;
     ULONG got_mask = Wait(wait_mask);
     if(got_mask & sync_mask) {
-      PutStr("got it.\n");
+      PutStr("runserv: service launched!\n");
     }
     else {
       // get socket back to clean up
@@ -182,7 +182,7 @@ int runserv(ULONG port, const char *service, ULONG stack)
     }
   }
 
-  PutStr("Shuttting down.\n");
+  PutStr("runserv: shuttting down.\n");
   CloseSocket(listen_fd);
 
   FreeSignal(sync_signal);

@@ -5,12 +5,13 @@ include $(SCRIPT_DIR)/define.mk
 CFLAGS += -Iinclude
 
 # define tools
-$(eval $(call def_tool,RCLID,rclid,serv.c vcon.c timer.c shell.c))
+$(eval $(call def_tool,RCLID,rclid,serv.c vcon.c timer.c shell.c sockio.c))
 $(eval $(call def_tool,RUNSERV,runserv))
 $(eval $(call def_tool,TESTSHELL,testshell,shell.c))
 $(eval $(call def_tool,TESTVCON,testvcon,shell.c vcon.c timer.c))
 $(eval $(call def_tool,TESTTIMER,testtimer,timer.c))
 $(eval $(call def_tool,TESTCLIENT,testclient))
+$(eval $(call def_tool,TESTSOCKIO,testsockio,sockio.c serv.c))
 
 # ----- tools -----
 .PHONY: all $(TOOLS)
@@ -30,6 +31,7 @@ $(eval $(call add_tool,TESTSHELL,testshell))
 $(eval $(call add_tool,TESTVCON,testvcon))
 $(eval $(call add_tool,TESTTIMER,testtimer))
 $(eval $(call add_tool,TESTCLIENT,testclient))
+$(eval $(call add_tool,TESTSOCKIO,testsockio))
 
 # --- compile ---
 $(OBJ_PATH)/%.o: %.c

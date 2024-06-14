@@ -3,6 +3,8 @@
 
 #ifdef LOG_ENABLED
 
+#include <proto/dos.h>
+
 #define LOG(fmt) Printf fmt
 
 #else

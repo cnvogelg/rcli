@@ -55,8 +55,8 @@ int testvcon(void)
         LONG size = vcon_read_begin(sc, &buffer);
         Printf("VREAD size=%ld\n", buffer.size);
         //read_func(&buffer);
-        buffer.size = Read(Input(), buffer.data, buffer.size);
-        vcon_read_end(sc, &buffer);
+        LONG actual_size = Read(Input(), buffer.data, buffer.size);
+        vcon_read_end(sc, &buffer, actual_size);
         Printf("VREAD done. size=%ld\n", buffer.size);
       }
       if(status & VCON_HANDLE_WRITE) {
@@ -69,16 +69,23 @@ int testvcon(void)
         vcon_write_end(sc, &buffer);
         PutStr("VWRITE done.\n");
       }
-      if(status & VCON_HANDLE_WAIT_CHAR) {
+      if(status & VCON_HANDLE_WAIT_BEGIN) {
         ULONG wait_s = 0, wait_us = 0;
-        vcon_waitchar_get_wait_time(sc, &wait_s, &wait_us);
+        vcon_wait_char_get_wait_time(sc, &wait_s, &wait_us);
         ULONG total = wait_s * 1000000UL + wait_us;
         Printf("VWAITCHAR: s=%ld us=%ld -> %ld", wait_s, wait_us, total);
         BOOL ok = WaitForChar(Input(), total);
         if(ok) {
           PutStr("REPORT!\n");
-          vcon_waitchar_report(sc);
+          vcon_wait_char_report(sc);
         }
+      }
+      if(status & VCON_HANDLE_WAIT_END) {
+        PutStr("VWAITCHAR: end.\n");
+      }
+      if(status & VCON_HANDLE_MODE) {
+        LONG mode = vcon_get_buffer_mode(sc);
+        Printf("VMODE: mode=%ld\n", mode);
       }
       if(status & VCON_HANDLE_CLOSE) {
         PutStr("VCLOSED console\n");

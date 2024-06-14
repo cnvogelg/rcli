@@ -13,6 +13,7 @@ extern void timer_exit(timer_handle_t *th);
 extern ULONG timer_get_sig_mask(timer_handle_t *th);
 extern timer_job_t *timer_get_next_done_job(timer_handle_t *th);
 
+extern BOOL timer_has_jobs(timer_handle_t *th);
 extern timer_job_t *timer_get_first_job(timer_handle_t *th);
 extern timer_job_t *timer_get_next_job(timer_job_t *job);
 

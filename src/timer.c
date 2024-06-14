@@ -88,6 +88,12 @@ timer_job_t *timer_get_next_done_job(timer_handle_t *th)
   return job;
 }
 
+BOOL timer_has_jobs(timer_handle_t *th)
+{
+  struct Node *node = GetHead(&th->job_list);
+  return node != NULL;
+}
+
 timer_job_t *timer_get_first_job(timer_handle_t *th)
 {
   struct Node *node = GetHead(&th->job_list);
