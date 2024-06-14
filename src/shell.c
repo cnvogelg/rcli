@@ -66,7 +66,7 @@ static ASM SAVEDS int start_proc(REG(a0, char *arg_str), REG(d0, long arg_len))
     SYS_Output, sh->fh_out,
     NP_ExitCode, exit_func,
     NP_ExitData, sh,
-    NP_WindowPtr, NULL, // disable reqs from DOS
+    NP_WindowPtr, -1, // disable reqs from DOS
     TAG_DONE);
 
   // if the shell could not launch then report the exit status from here
@@ -119,7 +119,7 @@ shell_handle_t *shell_init(BPTR fh_in, BPTR fh_out, const char *shell_startup,
       NP_Entry, start_proc,
       NP_ExitData, sh, // we pass our handle via exit code
       NP_ConsoleTask, NULL,
-      NP_WindowPtr, NULL,
+      NP_WindowPtr, -1,
       TAG_END);
 
   return sh;
