@@ -120,7 +120,7 @@ static int handle_vcon(serv_data_t *sd, ULONG got_con_mask)
       }
 
       // start sockio read
-      ok = sockio_rx_begin(sd->sockio, &sd->rx_buf, 1); // at least 1 char
+      ok = sockio_rx_begin(sd->sockio, &sd->rx_buf, 1); // at least 1 char up to full buffer
       if(!ok) {
         error_out(sd->socket, "ERROR: sockio_rx_begin!\n");
         return HANDLE_ERROR;
@@ -223,11 +223,11 @@ static BOOL main_loop(serv_data_t *sd)
 
     // sockio rx req is done
     if(flags & SOCKIO_HANDLE_RX_DONE) {
-      LONG rx_size = sockio_rx_end(sd->sockio);
-      LOG(("SOCKIO: RX done=%ld\n", rx_size));
+      buf_t *buf = sockio_rx_end(sd->sockio);
+      LOG(("SOCKIO: RX done=%ld\n", buf->size));
 
       // submit to vcon
-      vcon_read_end(sd->vcon, &sd->rx_buf, rx_size);
+      vcon_read_end(sd->vcon, &sd->rx_buf);
 
       sd->rx_pending = FALSE;
     }

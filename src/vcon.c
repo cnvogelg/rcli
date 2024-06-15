@@ -356,13 +356,14 @@ BOOL vcon_read_begin(vcon_handle_t *sh, buf_t *buf)
 
   buf->data = (APTR)pkt->dp_Arg2;
   buf->size = pkt->dp_Arg3;
+  buf->capacity = buf->size;
 
   sh->rw_pkt = pkt;
 
   return TRUE;
 }
 
-void vcon_read_end(vcon_handle_t *sh, buf_t *buf, LONG actual_size)
+void vcon_read_end(vcon_handle_t *sh, buf_t *buf)
 {
   /* remove from rw list */
   RemHead(&sh->rw_list);
@@ -370,7 +371,7 @@ void vcon_read_end(vcon_handle_t *sh, buf_t *buf, LONG actual_size)
   struct DosPacket *pkt = sh->rw_pkt;
 
   /* reply dos packet */
-  ReplyPkt(pkt, actual_size, 0);
+  ReplyPkt(pkt, buf->size, 0);
 }
 
 BOOL vcon_write_begin(vcon_handle_t *sh, buf_t *buf)
@@ -384,10 +385,12 @@ BOOL vcon_write_begin(vcon_handle_t *sh, buf_t *buf)
   if(pkt == NULL) {
     return FALSE;
   }
-  sh->rw_pkt = pkt;
 
   buf->data = (APTR)pkt->dp_Arg2;
   buf->size = pkt->dp_Arg3;
+  buf->capacity = buf->size;
+
+  sh->rw_pkt = pkt;
 
   return TRUE;
 }

@@ -15,7 +15,8 @@ static void main_loop(sockio_handle_t *sio)
 {
   buf_t buf = {
     .data = buffer,
-    .size = 1024
+    .size = 1024,
+    .capacity = 1024
   };
 
   // allow buf to be filled
@@ -38,20 +39,19 @@ static void main_loop(sockio_handle_t *sio)
       break;
     }
     if(flags & SOCKIO_HANDLE_RX_DONE) {
-      LONG rx_size = sockio_rx_end(sio);
-      Printf("RX done=%ld\n", rx_size);
+      buf_t *buf = sockio_rx_end(sio);
+      Printf("RX done=%ld\n", buf->size);
 
       // echo data back
-      buf.size = rx_size;
-      sockio_tx_begin(sio, &buf);
+      sockio_tx_begin(sio, buf);
     }
     if(flags & SOCKIO_HANDLE_TX_DONE) {
       PutStr("TX done\n");
-      sockio_tx_end(sio);
+      buf_t *buf = sockio_tx_end(sio);
 
       // start rx again
-      buf.size = 1024;
-      sockio_rx_begin(sio, &buf, 1);
+      buf->size = buf->capacity;
+      sockio_rx_begin(sio, buf, 1);
     }
   }
 }

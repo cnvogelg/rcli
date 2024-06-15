@@ -12,11 +12,15 @@
 
 struct sockio_handle {
   int socket;
+
   buf_t *rx_buffer;
   buf_t *tx_buffer;
+
   ULONG rx_min_size;
+
   ULONG rx_actual;
   ULONG tx_actual;
+
   BOOL  waiting_for_char;
   BOOL  got_char;
 };
@@ -118,11 +122,11 @@ ULONG sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
   // handle socket RX
   if(rx_buf != NULL) {
     if(FD_ISSET(sio->socket, &rx_fds) && rx_pending) {
-      // try to read in up to rx_free bytes
-      ULONG rx_free = rx_buf->size - sio->rx_actual;
+      // try to read in missing bytes
+      ULONG rx_size = rx_buf->size - sio->rx_actual;
       UBYTE *ptr = rx_buf->data + sio->rx_actual;
-      LOG(("RX READY! recv up to %ld bytes (actual %ld)\n", rx_free, sio->rx_actual));
-      long res = recv(sio->socket, ptr, rx_free, 0);
+      LOG(("RX READY! recv up to %ld bytes (actual %ld)\n", rx_size, sio->rx_actual));
+      long res = recv(sio->socket, ptr, rx_size, 0);
       LOG(("RX RESULT: %ld\n", res));
       if(res == -1) {
         // on EAGAIN simply repeat in next handle call
@@ -182,7 +186,7 @@ ULONG sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
   return flags;
 }
 
-/* submit buffer with given capacity */
+/* submit RX buffer and receive up to buf->size bytes. */
 BOOL sockio_rx_begin(sockio_handle_t *sio, buf_t *buf, ULONG min_size)
 {
   // already a buffer pending?
@@ -191,7 +195,7 @@ BOOL sockio_rx_begin(sockio_handle_t *sio, buf_t *buf, ULONG min_size)
   }
 
   if(min_size == 0) {
-    min_size = 1;
+    min_size = buf->size;
   }
 
   sio->rx_buffer = buf;
@@ -202,19 +206,20 @@ BOOL sockio_rx_begin(sockio_handle_t *sio, buf_t *buf, ULONG min_size)
 }
 
 /* after RX_DONE reclaim buffer and return actual size */
-ULONG sockio_rx_end(sockio_handle_t *sio)
+buf_t *sockio_rx_end(sockio_handle_t *sio)
 {
   if(sio->rx_buffer == NULL) {
     return 0;
   }
 
-  ULONG rx_size = sio->rx_actual;
+  buf_t *buf = sio->rx_buffer;
+  buf->size = sio->rx_actual;
 
   sio->rx_buffer = NULL;
   sio->rx_min_size = 0;
   sio->rx_actual = 0;
 
-  return rx_size;
+  return buf;
 }
 
 /* --- TX --- */
@@ -233,10 +238,14 @@ BOOL sockio_tx_begin(sockio_handle_t *sio, buf_t *buf)
 }
 
 /* after TX_DONE reclaim buffer */
-void sockio_tx_end(sockio_handle_t *sio)
+buf_t *sockio_tx_end(sockio_handle_t *sio)
 {
+  buf_t *buf = sio->tx_buffer;
+
   sio->tx_buffer = NULL;
   sio->tx_actual = 0;
+
+  return buf;
 }
 
 /* start waiting for a char */

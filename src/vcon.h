@@ -32,13 +32,13 @@ BOOL  vcon_send_signal(vcon_handle_t *sh, ULONG sig_mask);
 /* process the signals the vcon handles. return VCON_HANDLE_xx */
 ULONG vcon_handle_sigmask(vcon_handle_t *sh, ULONG sig_mask);
 
-/* something to read. return size and buffer */
+/* something to read. buf must be empty and is set to external data/size/capacity */
 BOOL vcon_read_begin(vcon_handle_t *sh, buf_t *buf);
 
-/* done reading. set the total number of bytes read or -1 for error */
-void vcon_read_end(vcon_handle_t *sh, buf_t *buf, LONG actual_size);
+/* done reading. set the total number of bytes read before in buf->size */
+void vcon_read_end(vcon_handle_t *sh, buf_t *buf);
 
-/* is something to write pending and how much? */
+/* is something to write pending and how much. buf must be emtpy and is set to external data/size/capacity */
 BOOL vcon_write_begin(vcon_handle_t *sh, buf_t *buf);
 
 /* done writing. set the toal number of bytes written */

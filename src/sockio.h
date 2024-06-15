@@ -20,18 +20,19 @@ void sockio_exit(sockio_handle_t *sio);
 ULONG sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask);
 
 /* --- RX --- */
-/* submit buffer with given capacity */
+/* submit RX buffer and reveive up to buf->size.
+   min_size allows to receive less data. 0=size */
 BOOL sockio_rx_begin(sockio_handle_t *sio, buf_t *buf, ULONG min_size);
 
-/* after RX_DONE reclaim buffer and return actual size */
-ULONG sockio_rx_end(sockio_handle_t *sio);
+/* after RX_DONE reclaim buffer. size holds the actual size received */
+buf_t *sockio_rx_end(sockio_handle_t *sio);
 
 /* --- TX --- */
-/* submit buffer with given size */
+/* submit buffer and send buf->size */
 BOOL sockio_tx_begin(sockio_handle_t *sio, buf_t *buf);
 
-/* after TX_DONE reclaim buffer */
-void sockio_tx_end(sockio_handle_t *sio);
+/* after TX_DONE reclaim buffer. size holds tx_size */
+buf_t *sockio_tx_end(sockio_handle_t *sio);
 
 /* --- wait char --- */
 /* start waiting for a char */

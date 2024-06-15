@@ -56,8 +56,9 @@ int testvcon(void)
         Printf("VREAD size=%ld\n", buffer.size);
         //read_func(&buffer);
         LONG actual_size = Read(Input(), buffer.data, buffer.size);
-        vcon_read_end(sc, &buffer, actual_size);
-        Printf("VREAD done. size=%ld\n", buffer.size);
+        buffer.size = actual_size;
+        vcon_read_end(sc, &buffer);
+        Printf("VREAD done. size=%ld\n");
       }
       if(status & VCON_HANDLE_WRITE) {
         APTR buf = NULL;
