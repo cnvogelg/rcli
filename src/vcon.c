@@ -9,24 +9,27 @@
 #include <dos/dostags.h>
 
 #define ZERO 0
-//#define LOG_ENABLED
+#define LOG_ENABLED
 
 #include "vcon.h"
 #include "log.h"
 #include "listutil.h"
-#include "timer.h"
+
+#define VCON_MSG_FREE     0xff
 
 struct vcon_handle {
-  struct MsgPort          *msg_port;
+  struct MsgPort          *pkt_port;
   struct MsgPort          *signal_port;
-  timer_handle_t         *timer;
-  struct DosPacket       *rw_pkt;
-  struct List             rw_list;
-  ULONG                   sigmask_port;
-  ULONG                   open_cnt;
-  LONG                    buffer_mode;
-  LONG                    cur_flags;
-  BOOL                    report_wait_end;
+  struct MsgPort          *user_port;
+  struct MsgPort          *vmsg_port;
+  struct List              free_vmsg_list;
+  struct vcon_msg         *vmsgs;
+  ULONG                    max_msgs;
+  ULONG                    pkt_sigmask;
+  ULONG                    vmsg_sigmask;
+  ULONG                    open_cnt;
+  UBYTE                    buffer_mode;
+  UBYTE                    state;
 };
 
 static struct DosPacket *msg_to_pkt(struct Message *Msg)
@@ -34,11 +37,13 @@ static struct DosPacket *msg_to_pkt(struct Message *Msg)
   return (struct DosPacket *)Msg->mn_Node.ln_Name;
 }
 
-vcon_handle_t *vcon_init(void)
+vcon_handle_t *vcon_init(struct MsgPort *user_port, ULONG max_msgs)
 {
-  /* setup timer */
-  timer_handle_t *timer = timer_init();
-  if(timer == NULL) {
+  /* check param */
+  if(max_msgs < 8) {
+    max_msgs = 8;
+  }
+  if(user_port == NULL) {
     return NULL;
   }
 
@@ -48,25 +53,80 @@ vcon_handle_t *vcon_init(void)
     return NULL;
   }
 
-  sh->timer = timer;
+  /* where to send new vmsgs ... */
+  sh->user_port = user_port;
+  sh->max_msgs = max_msgs;
 
-  /* create a msg port for con dos packets */
-  struct MsgPort *msg_port = CreateMsgPort();
-  if(msg_port == NULL) {
-    FreeVec(sh);
-    return NULL;
+  /* alloc buffer for vmsgs */
+  ULONG vmsg_size = (sizeof(vcon_msg_t) + 3) & ~3;
+  struct vcon_msg *msgs = (struct vcon_msg *)AllocVec(vmsg_size * max_msgs, MEMF_ANY | MEMF_CLEAR);
+  if(msgs == NULL) {
+    goto fail;
   }
+  sh->vmsgs = msgs;
 
   /* setup con handle */
-  NewList(&sh->rw_list);
-  sh->msg_port = msg_port;
-  sh->sigmask_port = 1 << sh->msg_port->mp_SigBit;
-  sh->open_cnt = 1;
-  sh->signal_port = NULL;
-  sh->buffer_mode = 0;
-  sh->cur_flags = 0;
+  NewList(&sh->free_vmsg_list);
 
+  /* fill free list */
+  for(ULONG i=0;i<max_msgs;i++) {
+    struct vcon_msg *msg = &msgs[i];
+    msg->type = VCON_MSG_FREE;
+    AddTail(&sh->free_vmsg_list, (struct Node *)msg);
+  }
+
+  /* create a msg port for con dos packets */
+  sh->pkt_port = CreateMsgPort();
+  if(sh->pkt_port == NULL) {
+    goto fail;
+  }
+
+  /* create a msg port for replied vmsgs from the user */
+  sh->vmsg_port = CreateMsgPort();
+  if(sh->vmsg_port == NULL) {
+    goto fail;
+  }
+
+  /* signals for pkt and vmsg port */
+  sh->pkt_sigmask = 1 << sh->pkt_port->mp_SigBit;
+  sh->vmsg_sigmask = 1 << sh->vmsg_port->mp_SigBit;
+
+  /* no handle open yet */
+  sh->state = VCON_STATE_CLOSE;
+
+  /* all ok. return handle */
   return sh;
+
+fail:
+  vcon_exit(sh);
+  return NULL;
+}
+
+void vcon_cleanup(vcon_handle_t *sh)
+{
+  for(ULONG i=0;i<sh->max_msgs;i++) {
+    vcon_msg_t *vmsg = &sh->vmsgs[i];
+    if(vmsg->type != VCON_MSG_FREE) {
+      struct DosPacket *pkt = (struct DosPacket *)vmsg->private;
+      LOG(("vcon: cleanup vmsg: %lx type=%ld pkt=%lx\n", vmsg, (LONG)vmsg->type, pkt));
+
+      LONG res1 = DOSFALSE;
+      LONG res2 = ERROR_NO_FREE_STORE;
+      switch(vmsg->type) {
+      case VCON_MSG_READ:
+        res1 = 0;
+        res2 = 0;
+        break;
+      case VCON_MSG_WRITE:
+        res1 = 0;
+        res2 = 0;
+        break;
+      }
+
+      LOG(("vcon: reply: pkt=%lx res1=%ld res2=%ld\n", pkt, res1, res2));
+      ReplyPkt(pkt, res1, res2);
+    }
+  }
 }
 
 void vcon_exit(vcon_handle_t *sh)
@@ -75,12 +135,18 @@ void vcon_exit(vcon_handle_t *sh)
     return;
   }
 
-  if(sh->msg_port != NULL) {
-    DeleteMsgPort(sh->msg_port);
+  vcon_cleanup(sh);
+
+  if(sh->vmsg_port != NULL) {
+    DeleteMsgPort(sh->vmsg_port);
   }
 
-  if(sh->timer != NULL) {
-    timer_exit(sh->timer);
+  if(sh->pkt_port != NULL) {
+    DeleteMsgPort(sh->pkt_port);
+  }
+
+  if(sh->vmsgs != NULL) {
+    FreeVec(sh->vmsgs);
   }
 
   FreeVec(sh);
@@ -88,6 +154,10 @@ void vcon_exit(vcon_handle_t *sh)
 
 BPTR vcon_create_fh(vcon_handle_t *sh)
 {
+  if(sh->state == VCON_STATE_ERROR) {
+    return ZERO;
+  }
+
   /* create a fake file handle */
   struct FileHandle *fh = AllocDosObjectTags(DOS_FILEHANDLE,
         ADO_FH_Mode,MODE_OLDFILE,
@@ -98,32 +168,69 @@ BPTR vcon_create_fh(vcon_handle_t *sh)
 
   fh->fh_Pos  = -1;
   fh->fh_End  = -1;
-  fh->fh_Type = sh->msg_port;
+  fh->fh_Type = sh->pkt_port;
   fh->fh_Args = (LONG)sh;
   fh->fh_Port = (struct MsgPort *)4; // simply a non-zero value to be interactive
+
+  sh->open_cnt ++;
+  sh->state = VCON_STATE_OPEN;
 
   return MKBADDR(fh);
 }
 
-LONG vcon_get_buffer_mode(vcon_handle_t *sh)
-{
-  return sh->buffer_mode;
-}
-
 ULONG vcon_get_sigmask(vcon_handle_t *sh)
 {
-  return sh->sigmask_port | timer_get_sig_mask(sh->timer);
+  return sh->pkt_sigmask | sh->vmsg_sigmask;
 }
 
-static ULONG handle_pkt(vcon_handle_t *sh, struct Message *msg)
+BOOL vcon_send_signal(vcon_handle_t *sh, ULONG sig_mask)
 {
-  ULONG flags = 0;
+  if(sh->signal_port != NULL) {
+    struct Task *task = sh->signal_port->mp_SigTask;
+    if(task != NULL) {
+      Signal(task, sig_mask);
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+static vcon_msg_t *alloc_vmsg(vcon_handle_t *sh, UBYTE type, APTR data, ULONG size, APTR private)
+{
+  vcon_msg_t *vmsg = (vcon_msg_t *)RemHead(&sh->free_vmsg_list);
+  if(vmsg != NULL) {
+    vmsg->msg.mn_ReplyPort = sh->vmsg_port;
+    vmsg->type = type;
+    vmsg->buffer_mode = sh->buffer_mode;
+    vmsg->buffer.data = data;
+    vmsg->buffer.size = size;
+    vmsg->private = private;
+
+    LOG(("vcon: vmsg alloc: %lx type=%ld pkt=%lx\n", vmsg, (LONG)vmsg->type, vmsg->private));
+  }
+  return vmsg;
+}
+
+static void free_vmsg(vcon_handle_t *sh, vcon_msg_t *vmsg)
+{
+  LOG(("vcon: vmsg free: %lx type=%ld pkt=%lx\n", vmsg, (LONG)vmsg->type, vmsg->private));
+
+  /* re-add to free list */
+  AddTail(&sh->free_vmsg_list, (struct Node *)vmsg);
+
+  vmsg->type = VCON_MSG_FREE;
+}
+
+static void handle_dos_pkt(vcon_handle_t *sh, struct Message *msg)
+{
   struct DosPacket *pkt = msg_to_pkt(msg);
   struct FileHandle *fh=(struct FileHandle *)BADDR((BPTR)pkt->dp_Arg1);
 
   LONG res1 = DOSTRUE;
   LONG res2 = 0;
   BOOL do_reply = TRUE;
+  BOOL ok = TRUE;
+  vcon_msg_t *vmsg = NULL;
 
   LONG type = pkt->dp_Type;
   switch(type) {
@@ -131,23 +238,23 @@ static ULONG handle_pkt(vcon_handle_t *sh, struct Message *msg)
     case ACTION_FINDOUTPUT:
     case ACTION_FINDUPDATE:
       sh->open_cnt++;
-      LOG(("OPEN: fh=%lx name=%b count=%ld\n", fh, BADDR((BPTR)pkt->dp_Arg3), (ULONG)sh->open_cnt));
+      LOG(("vcon: OPEN: fh=%lx name=%b count=%ld\n", fh, BADDR((BPTR)pkt->dp_Arg3), (ULONG)sh->open_cnt));
       fh->fh_Pos = -1;
       fh->fh_End = -1;
-      fh->fh_Type= sh->msg_port;
+      fh->fh_Type= sh->pkt_port;
       fh->fh_Args= (LONG)sh;
       fh->fh_Port= (struct MsgPort *)4;
       break;
     case ACTION_END:
       sh->open_cnt--;
-      LOG(("CLOSE: fh=%lx count=%ld\n", fh, (ULONG)sh->open_cnt));
       if(sh->open_cnt == 0) {
-        flags = VCON_HANDLE_CLOSE;
+        sh->state = VCON_STATE_CLOSE;
       }
+      LOG(("vcon: CLOSE: fh=%lx count=%ld\n", fh, (ULONG)sh->open_cnt));
       break;
     case ACTION_CHANGE_SIGNAL: {
       struct MsgPort *msg_port = (struct MsgPort *)pkt->dp_Arg2;
-      LOG(("CHANGE_SIGNAL: fh=%lx msg_port=%lx\n", fh, msg_port));
+      LOG(("vcon: CHANGE_SIGNAL: fh=%lx msg_port=%lx\n", fh, msg_port));
       /* return old port */
       res1 = DOSTRUE;
       res2 = (LONG)sh->signal_port;
@@ -156,15 +263,21 @@ static ULONG handle_pkt(vcon_handle_t *sh, struct Message *msg)
     }
     case ACTION_SCREEN_MODE: {
       LONG mode = pkt->dp_Arg1;
-      LOG(("SCREEN_MODE: mode=%ld\n", mode));
+      LOG(("vcon: SCREEN_MODE: mode=%ld\n", mode));
       sh->buffer_mode = mode;
-      flags = VCON_HANDLE_MODE;
-      res1 = DOSTRUE;
-      res2 = 0;
+      /* send mode vmsg */
+      vmsg = alloc_vmsg(sh, VCON_MSG_MODE, NULL, 0, pkt);
+      if(vmsg != NULL) {
+        PutMsg(sh->user_port, (struct Message *)vmsg);
+        do_reply = FALSE;
+      } else {
+        res1 = DOSFALSE;
+        res2 = ERROR_NO_FREE_STORE;
+      }
       break;
     }
     case ACTION_DISK_INFO: {
-      LOG(("DISK_INFO\n"));
+      LOG(("vcon: DISK_INFO\n"));
       struct InfoData *id = (struct InfoData *)BADDR((BPTR)pkt->dp_Arg1);
       if(id != NULL) {
         LOG(("id_DiskType %lx\n", id->id_DiskType));
@@ -183,19 +296,33 @@ static ULONG handle_pkt(vcon_handle_t *sh, struct Message *msg)
     case ACTION_WRITE: {
       APTR buf = (APTR)pkt->dp_Arg2;
       LONG size = pkt->dp_Arg3;
-      LOG(("WRITE: pkt=%lx fh=%lx buf=%lx size=%ld\n", pkt, fh, buf, size));
-      /* add to rw list and do not reply now */
-      do_reply = FALSE;
-      AddTail(&sh->rw_list, (struct Node *)msg);
+      LOG(("vcon: WRITE: pkt=%lx fh=%lx buf=%lx size=%ld\n", pkt, fh, buf, size));
+      /* send write vmsg */
+      vmsg = alloc_vmsg(sh, VCON_MSG_WRITE, buf, size, pkt);
+      if(vmsg != NULL) {
+        PutMsg(sh->user_port, (struct Message *)vmsg);
+        do_reply = FALSE;
+      } else {
+        res1 = DOSFALSE;
+        res2 = ERROR_NO_FREE_STORE;
+        sh->state = VCON_STATE_ERROR;
+      }
       break;
     }
     case ACTION_READ: {
       APTR buf = (APTR)pkt->dp_Arg2;
       LONG size = pkt->dp_Arg3;
-      LOG(("READ: pkt=%lx fh=%lx buf=%lx size=%ld\n", pkt, fh, buf, size));
-      /* add to rw list and do not reply now */
-      do_reply = FALSE;
-      AddTail(&sh->rw_list, (struct Node *)msg);
+      LOG(("vcon: READ: pkt=%lx fh=%lx buf=%lx size=%ld\n", pkt, fh, buf, size));
+      /* send read vmsg */
+      vmsg = alloc_vmsg(sh, VCON_MSG_READ, buf, size, pkt);
+      if(vmsg != NULL) {
+        PutMsg(sh->user_port, (struct Message *)vmsg);
+        do_reply = FALSE;
+      } else {
+        res1 = DOSFALSE;
+        res2 = ERROR_NO_FREE_STORE;
+        sh->state = VCON_STATE_ERROR;
+      }
       /* implicitly set signal port to reader */
       sh->signal_port = pkt->dp_Port;
       break;
@@ -203,301 +330,95 @@ static ULONG handle_pkt(vcon_handle_t *sh, struct Message *msg)
     case ACTION_SEEK: {
       LONG offset = pkt->dp_Arg2;
       LONG mode = pkt->dp_Arg3;
-      LOG(("SEEK: offset=%ld mode=%ld\n", offset, mode));
+      LOG(("vcon: SEEK: offset=%ld mode=%ld\n", offset, mode));
       res1 = DOSFALSE;
       res2 = ERROR_OBJECT_WRONG_TYPE;
       break;
     }
     case ACTION_WAIT_CHAR: {
       ULONG time_us = pkt->dp_Arg1;
-      LOG(("WAIT_CHAR: pkt=%lx time us=%lu\n", pkt, time_us));
-      ULONG time_s = 0;
-      if(time_us > 1000000UL) {
-        time_s = time_us / 1000000UL;
-        time_us %= 1000000UL;
-      }
-      BOOL first_wait = !timer_has_jobs(sh->timer);
-      LOG(("WAIT_CHAR: time s=%lu us=%lu first=%ld\n", time_s, time_us, (LONG)first_wait));
-      timer_job_t *job = timer_start(sh->timer, time_s, time_us, pkt);
-      do_reply = FALSE;
-      if(first_wait) {
-        flags |= VCON_HANDLE_WAIT_BEGIN;
+      LOG(("vcon: WAIT_CHAR: pkt=%lx time us=%lu\n", pkt, time_us));
+      /* send wait char vmsg */
+      vmsg = alloc_vmsg(sh, VCON_MSG_WAIT_CHAR, NULL, 0, pkt);
+      if(vmsg != NULL) {
+        /* store timeout in buffer.size */
+        vmsg->buffer.size = time_us;
+        /* send msg */
+        PutMsg(sh->user_port, (struct Message *)vmsg);
+        do_reply = FALSE;
+      } else {
+        res1 = DOSFALSE;
+        res2 = ERROR_NO_FREE_STORE;
+        sh->state = VCON_STATE_ERROR;
       }
       break;
     }
     default:
-      LOG(("Unknown PKT: %ld\n", type));
+      LOG(("vcon: UNKNOWN PKT: %ld\n", type));
       res1 = DOSFALSE;
       res2 = ERROR_ACTION_NOT_KNOWN;
       break;
   }
   if(do_reply) {
-      LOG(("do-reply: res1=%ld res2=%ld\n", res1, res2));
+      LOG(("vcon: reply: pkt=%lx res1=%ld res2=%ld\n", pkt, res1, res2));
       ReplyPkt(pkt, res1, res2);
   }
-  return flags;
 }
 
-static struct DosPacket *get_first_rw_pkt(vcon_handle_t *sh)
+static void handle_vmsg_reply(vcon_handle_t *sh, struct Message *msg)
 {
-  /* what's next on rw list? */
-  struct Message *msg = (struct Message *)GetHead(&sh->rw_list);
-  if(msg != NULL) {
-    struct DosPacket *pkt = msg_to_pkt(msg);
-    return pkt;
-  } else {
-    return NULL;
+  vcon_msg_t *vmsg = (vcon_msg_t *)msg;
+  struct DosPacket *pkt = (struct DosPacket *)vmsg->private;
+  LOG(("vcon: reply: vmsg: %lx type=%ld pkt=%lx\n", vmsg, (LONG)vmsg->type, pkt));
+
+  LONG res1 = DOSTRUE;
+  LONG res2 = 0;
+  switch(vmsg->type) {
+  case VCON_MSG_READ:
+  case VCON_MSG_WRITE:
+    res1 = vmsg->buffer.size;
+    break;
+  case VCON_MSG_WAIT_CHAR:
+    /* extract number of lines from buffer.size */
+    if(vmsg->buffer.size == 0) {
+      /* no char received */
+      res1 = DOSFALSE;
+      res2 = 0;
+    } else {
+      /* char available return number of lines */
+      res1 = DOSTRUE;
+      res2 = vmsg->buffer.size;
+    }
+    break;
   }
-}
 
-static ULONG update_rw_flags(vcon_handle_t *sh)
-{
-  ULONG flags = 0;
-
-  /* what's next on rw list? */
-  struct DosPacket *pkt = get_first_rw_pkt(sh);
   if(pkt != NULL) {
-    LONG type = pkt->dp_Type;
-    LOG(("update rw: Head packet type: %ld\n", type));
-    if(type == ACTION_READ) {
-      flags = VCON_HANDLE_READ;
-    }
-    else if(type == ACTION_WRITE) {
-      flags = VCON_HANDLE_WRITE;
-    }
-  } else {
-    LOG(("update rw: No head packet!\n"));
+    LOG(("vcon: reply: pkt=%lx res1=%ld res2=%ld\n", pkt, res1, res2));
+    ReplyPkt(pkt, res1, res2);
   }
 
-  return flags;
-}
-
-BOOL vcon_send_signal(vcon_handle_t *sh, ULONG sig_mask)
-{
-  if(sh->signal_port != NULL) {
-    struct Task *task = sh->signal_port->mp_SigTask;
-    if(task != NULL) {
-      Signal(task, sig_mask);
-      return TRUE;
-    }
-  }
-  return FALSE;
+  free_vmsg(sh, vmsg);
 }
 
 ULONG vcon_handle_sigmask(vcon_handle_t *sh, ULONG got_mask)
 {
   ULONG flags = 0;
 
-  /* handle DOS packets for our con */
-  if(got_mask & sh->sigmask_port) {
+  /* handle DOS packets for our virtual console */
+  if(got_mask & sh->pkt_sigmask) {
     struct Message *msg;
-    while((msg = GetMsg(sh->msg_port)) != NULL) {
-      ULONG add_flags = handle_pkt(sh, msg);
-      flags |= add_flags;
-
-      /* make sure that only one contribution of flags is returned.
-         otherwise multipe SCREEN_MODEs in a row are lost */
-      if(add_flags != 0) {
-        break;
-      }
+    while((msg = GetMsg(sh->pkt_port)) != NULL) {
+      handle_dos_pkt(sh, msg);
     }
   }
 
-  /* handle timeout jobs from wait char */
-  ULONG timer_mask = timer_get_sig_mask(sh->timer);
-  if(got_mask & timer_mask) {
-    while(TRUE) {
-      timer_job_t *job = timer_get_next_done_job(sh->timer);
-      if(job == NULL) {
-        break;
-      }
-      /* get associated dos packet */
-      struct DosPacket *pkt = (struct DosPacket *)timer_job_get_user_data(job);
-      /* report no key */
-      ReplyPkt(pkt, DOSFALSE, 0);
-      LOG(("WAIT_CHAR: timeout pkt=%lx\n", pkt));
-
-      timer_stop(job);
-    }
-
-    /* is last timer? */
-    BOOL no_timers = !timer_has_jobs(sh->timer);
-    if(no_timers) {
-      sh->report_wait_end = TRUE;
+  /* handle replied vcon messages from user */
+  if(got_mask & sh->vmsg_sigmask) {
+    struct Message *msg;
+    while((msg = GetMsg(sh->vmsg_port)) != NULL) {
+      handle_vmsg_reply(sh, msg);
     }
   }
 
-  /* update the rw flags */
-  flags |= update_rw_flags(sh);
-
-  /* report wait end */
-  if(sh->report_wait_end) {
-    sh->report_wait_end = FALSE;
-    flags |= VCON_HANDLE_WAIT_END;
-    LOG(("WAIT_CHAR: ending\n"));
-  }
-
-  /* keep current flags for follow up commands */
-  sh->cur_flags = flags;
-  return flags;
+  return sh->state;
 }
-
-BOOL vcon_read_begin(vcon_handle_t *sh, buf_t *buf)
-{
-  /* no read pending? */
-  if((sh->cur_flags & VCON_HANDLE_READ) == 0) {
-    return FALSE;
-  }
-
-  struct DosPacket *pkt = get_first_rw_pkt(sh);
-  if(pkt == NULL) {
-    return FALSE;
-  }
-
-  buf->data = (APTR)pkt->dp_Arg2;
-  buf->size = pkt->dp_Arg3;
-  buf->capacity = buf->size;
-
-  sh->rw_pkt = pkt;
-
-  return TRUE;
-}
-
-void vcon_read_end(vcon_handle_t *sh, buf_t *buf)
-{
-  /* remove from rw list */
-  RemHead(&sh->rw_list);
-
-  struct DosPacket *pkt = sh->rw_pkt;
-
-  /* reply dos packet */
-  ReplyPkt(pkt, buf->size, 0);
-}
-
-BOOL vcon_write_begin(vcon_handle_t *sh, buf_t *buf)
-{
-  /* no write pending? */
-  if((sh->cur_flags & VCON_HANDLE_WRITE) == 0) {
-    return FALSE;
-  }
-
-  struct DosPacket *pkt = get_first_rw_pkt(sh);
-  if(pkt == NULL) {
-    return FALSE;
-  }
-
-  buf->data = (APTR)pkt->dp_Arg2;
-  buf->size = pkt->dp_Arg3;
-  buf->capacity = buf->size;
-
-  sh->rw_pkt = pkt;
-
-  return TRUE;
-}
-
-void vcon_write_end(vcon_handle_t *sh, buf_t *buf)
-{
-  /* remove from rw list */
-  RemHead(&sh->rw_list);
-
-  struct DosPacket *pkt = sh->rw_pkt;
-
-  /* reply dos packet */
-  ReplyPkt(pkt, buf->size, 0);
-}
-
-static void drop_rw_pkts(vcon_handle_t *sh)
-{
-  struct Node *node = RemHead(&sh->rw_list);
-  while(node != NULL) {
-    /* abort all packets */
-    struct Message *msg = (struct Message *)node;
-    struct DosPacket *pkt = msg_to_pkt(msg);
-    LONG type = pkt->dp_Type;
-    LONG result;
-    if(type == ACTION_READ) {
-      /* read report EOF */
-      result = 0;
-    }
-    else {
-      /* pretend to write all */
-      result = pkt->dp_Arg3;
-    }
-
-    LOG(("DROP: rw pkt %lx\n", pkt));
-    ReplyPkt(pkt, result, 0);
-
-    node = RemHead(&sh->rw_list);
-  }
-  /* clear list */
-  NewList(&sh->rw_list);
-}
-
-static void drop_waitchar_pkts(vcon_handle_t *sh)
-{
-  timer_job_t *job = timer_get_first_job(sh->timer);
-  BOOL any = FALSE;
-  while(job != NULL) {
-    LOG(("DROP: timer job for pkt %lx\n"));
-    timer_job_t *next_job = timer_get_next_job(job);
-
-    /* get dos packet from job */
-    struct DosPacket *pkt = (struct DosPacket *)timer_job_get_user_data(job);
-    /* reply timeout */
-    ReplyPkt(pkt, DOSFALSE, 0);
-
-    timer_stop(job);
-
-    Remove((struct Node *)job);
-
-    job = next_job;
-    any = TRUE;
-  }
-
-  if(any) {
-    sh->report_wait_end = TRUE;
-  }
-}
-
-void vcon_drop(vcon_handle_t *sh)
-{
-  drop_rw_pkts(sh);
-  drop_waitchar_pkts(sh);
-}
-
-BOOL vcon_wait_char_get_wait_time(vcon_handle_t *sh, ULONG *wait_s, ULONG *wait_us)
-{
-  timer_job_t *job = timer_get_first_job(sh->timer);
-  if(job == NULL) {
-    return FALSE;
-  }
-
-  timer_job_get_wait_time(job, wait_s, wait_us);
-  return TRUE;
-}
-
-/* report a waiting key */
-BOOL vcon_wait_char_report(vcon_handle_t *sh)
-{
-  timer_job_t *job = timer_get_first_job(sh->timer);
-  if(job == NULL) {
-    return FALSE;
-  }
-
-  /* get dos packet from job */
-  struct DosPacket *pkt = (struct DosPacket *)timer_job_get_user_data(job);
-  /* reply success */
-  ReplyPkt(pkt, DOSTRUE, 0);
-  LOG(("WAIT_CHAR: OK pkt=%lx\n", pkt));
-
-  timer_stop(job);
-
-  /* report last one */
-  BOOL no_timers = !timer_has_jobs(sh->timer);
-  if(no_timers) {
-    sh->report_wait_end = TRUE;
-  }
-
-  return TRUE;
-}
-

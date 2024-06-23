@@ -16,116 +16,157 @@
 extern struct ExecBase *SysBase;
 struct DosLibrary *DOSBase;
 
+static void handle_vmsg(vcon_msg_t *vmsg)
+{
+  Printf("test: got VMSG: type=%ld pkt=%lx\n", (LONG)vmsg->type, vmsg->private);
+  buf_t *buffer = &vmsg->buffer;
+
+  switch(vmsg->type) {
+  case VCON_MSG_WRITE:
+    Printf("test: WRITE size=%ld\n", buffer->size);
+    PutStr("test: VDATA[");
+    FWrite(Output(), buffer->data, buffer->size, 1);
+    PutStr("]\n");
+    break;
+
+  case VCON_MSG_READ:
+    Printf("test: READ size=%ld\n", buffer->size);
+    LONG actual_size = Read(Input(), buffer->data, buffer->size);
+    buffer->size = actual_size;
+    Printf("test: READ actual=%ld\n", buffer->size);
+    break;
+
+  case VCON_MSG_MODE:
+    Printf("test: MODE=%ld\n", (LONG)vmsg->buffer_mode);
+    break;
+
+  case VCON_MSG_WAIT_CHAR: {
+    ULONG timeout_us = buffer->size;
+    Printf("test: WAIT CHAR timeout=%ld\n", timeout_us);
+    BOOL ok = WaitForChar(Input(), timeout_us);
+    if(ok) {
+      Printf("test: OK!\n");
+      vmsg->buffer.size = 1;
+    } else {
+      Printf("test: TIMEOUT!\n");
+      vmsg->buffer.size = 0;
+    }
+    break;
+  }
+
+  case VCON_MSG_WAIT_ABORT:
+    Printf("test: WAIT ABORT: ref=%lx", vmsg->private);
+    break;
+  }
+
+  PutStr("test: reply VMSG\n");
+  ReplyMsg((struct Message *)vmsg);
+}
+
 int testvcon(void)
 {
   shell_handle_t *sh;
   vcon_handle_t *sc;
+  struct MsgPort *vmsg_port;
   buf_t buffer;
 
-  PutStr("Setup shell console\n");
-  sc = vcon_init();
+  PutStr("test: Create msg port\n");
+  vmsg_port = CreateMsgPort();
+  if(vmsg_port == NULL) {
+    PutStr("ERROR getting msg port!\n");
+    return RETURN_ERROR;
+  }
+
+  PutStr("test: Setup shell console\n");
+  sc = vcon_init(vmsg_port, 8);
   if(sc == NULL) {
+    DeleteMsgPort(vmsg_port);
     PutStr("ERROR setting up shell console...\n");
     return RETURN_ERROR;
   }
 
-  PutStr("Setup shell\n");
+  PutStr("test: Setup shell\n");
   BPTR fh = vcon_create_fh(sc);
   sh = shell_init(fh, ZERO, NULL, 8192);
   if(sh == NULL) {
     PutStr("ERROR setting up shell...\n");
     vcon_exit(sc);
+    DeleteMsgPort(vmsg_port);
     return RETURN_ERROR;
   }
 
-  PutStr("Main loop...\n");
+  PutStr("test: Main loop...\n");
   ULONG shell_mask = shell_exit_mask(sh);
   ULONG con_mask = vcon_get_sigmask(sc);
-  ULONG masks = shell_mask | con_mask |
+  ULONG vmsg_mask = 1 << vmsg_port->mp_SigBit;
+  ULONG masks = shell_mask | con_mask | vmsg_mask |
     SIGBREAKF_CTRL_C | SIGBREAKF_CTRL_D | SIGBREAKF_CTRL_E | SIGBREAKF_CTRL_F;
   int ctrl_c_count = 0;
 
   while(TRUE) {
     ULONG got_mask = Wait(masks);
+
+    // handle vcon
     if(got_mask & con_mask) {
-      PutStr("handle console\n");
-      ULONG status = vcon_handle_sigmask(sc, got_mask & con_mask);
-      Printf("-> status=%lx\n", status);
-      if(status & VCON_HANDLE_READ) {
-        LONG size = vcon_read_begin(sc, &buffer);
-        Printf("VREAD size=%ld\n", buffer.size);
-        //read_func(&buffer);
-        LONG actual_size = Read(Input(), buffer.data, buffer.size);
-        buffer.size = actual_size;
-        vcon_read_end(sc, &buffer);
-        Printf("VREAD done. size=%ld\n");
+      PutStr("test: handle VCON\n");
+      ULONG state = vcon_handle_sigmask(sc, got_mask & con_mask);
+      Printf("test: -> state=%lx\n", state);
+      if(state == VCON_STATE_CLOSE) {
+        PutStr("test: VCON CLOSE!\n");
       }
-      if(status & VCON_HANDLE_WRITE) {
-        APTR buf = NULL;
-        LONG size = vcon_write_begin(sc, &buffer);;
-        Printf("VWRITE size=%ld\n", buffer.size);
-        PutStr("VDATA[");
-        FWrite(Output(), buffer.data, buffer.size, 1);
-        PutStr("]\n");
-        vcon_write_end(sc, &buffer);
-        PutStr("VWRITE done.\n");
-      }
-      if(status & VCON_HANDLE_WAIT_BEGIN) {
-        ULONG wait_s = 0, wait_us = 0;
-        vcon_wait_char_get_wait_time(sc, &wait_s, &wait_us);
-        ULONG total = wait_s * 1000000UL + wait_us;
-        Printf("VWAITCHAR: s=%ld us=%ld -> %ld", wait_s, wait_us, total);
-        BOOL ok = WaitForChar(Input(), total);
-        if(ok) {
-          PutStr("REPORT!\n");
-          vcon_wait_char_report(sc);
-        }
-      }
-      if(status & VCON_HANDLE_WAIT_END) {
-        PutStr("VWAITCHAR: end.\n");
-      }
-      if(status & VCON_HANDLE_MODE) {
-        LONG mode = vcon_get_buffer_mode(sc);
-        Printf("VMODE: mode=%ld\n", mode);
-      }
-      if(status & VCON_HANDLE_CLOSE) {
-        PutStr("VCLOSED console\n");
+      else if(state == VCON_STATE_ERROR) {
+        PutStr("test: VCON ERROR!!\n");
+        break;
       }
     }
+
+    // handle incoming vcon_msg_t from vcon
+    if(got_mask & vmsg_mask) {
+      struct Message *msg;
+      while((msg = GetMsg(vmsg_port)) != NULL) {
+        handle_vmsg((vcon_msg_t *)msg);
+      }
+    }
+
+    // shell reports end
     if(got_mask & shell_mask) {
+      PutStr("test: shell signal!\n");
       break;
     }
+
+    // handle ctrl signals
     if(got_mask & SIGBREAKF_CTRL_C) {
       if(ctrl_c_count == 0) {
-        PutStr("Ctrl-C signal");
+        PutStr("test: Ctrl-C signal");
         vcon_send_signal(sc, SIGBREAKF_CTRL_C);
         ctrl_c_count++;
       }
       else {
-        PutStr("*BREAK!\n");
-        vcon_drop(sc);
-        PutStr("dropped con!\n");
+        PutStr("test: *BREAK!\n");
+        break;
       }
     }
     if(got_mask & SIGBREAKF_CTRL_D) {
-      PutStr("Ctrl-D signal");
+      PutStr("test: Ctrl-D signal");
       vcon_send_signal(sc, SIGBREAKF_CTRL_D);
     }
     if(got_mask & SIGBREAKF_CTRL_E) {
-      PutStr("Ctrl-E signal");
+      PutStr("test: Ctrl-E signal");
       vcon_send_signal(sc, SIGBREAKF_CTRL_E);
     }
     if(got_mask & SIGBREAKF_CTRL_F) {
-      PutStr("Ctrl-F signal");
+      PutStr("test: Ctrl-F signal");
       vcon_send_signal(sc, SIGBREAKF_CTRL_F);
     }
   }
 
-  PutStr("Exit shell\n");
+  PutStr("test: Exit shell\n");
   LONG rc = shell_exit(sh);
-  Printf("done rc=%ld\n", rc);
+  Printf("test: done rc=%ld\n", rc);
+
   vcon_exit(sc);
-  PutStr("done.\n");
+  DeleteMsgPort(vmsg_port);
+  PutStr("test: all done.\n");
 
   return RETURN_OK;
 }
