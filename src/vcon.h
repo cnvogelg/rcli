@@ -3,11 +3,10 @@
 
 #include "buf.h"
 
-#define VCON_MSG_READ       0
-#define VCON_MSG_WRITE      1
-#define VCON_MSG_WAIT_CHAR  2
-#define VCON_MSG_WAIT_ABORT 3
-#define VCON_MSG_MODE       3
+#define VCON_MSG_READ           0
+#define VCON_MSG_WRITE          1
+#define VCON_MSG_WAIT_CHAR      2
+#define VCON_MSG_BUFFER_MODE    3
 
 #define VCON_STATE_OPEN    0
 #define VCON_STATE_CLOSE   1

@@ -36,8 +36,8 @@ static void handle_vmsg(vcon_msg_t *vmsg)
     Printf("test: READ actual=%ld\n", buffer->size);
     break;
 
-  case VCON_MSG_MODE:
-    Printf("test: MODE=%ld\n", (LONG)vmsg->buffer_mode);
+  case VCON_MSG_BUFFER_MODE:
+    Printf("test: BUFFER MODE=%ld\n", (LONG)vmsg->buffer_mode);
     break;
 
   case VCON_MSG_WAIT_CHAR: {
@@ -52,11 +52,7 @@ static void handle_vmsg(vcon_msg_t *vmsg)
       vmsg->buffer.size = 0;
     }
     break;
-  }
-
-  case VCON_MSG_WAIT_ABORT:
-    Printf("test: WAIT ABORT: ref=%lx", vmsg->private);
-    break;
+    }
   }
 
   PutStr("test: reply VMSG\n");

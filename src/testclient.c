@@ -11,16 +11,19 @@ struct DosLibrary *DOSBase;
 
 #define TEST_SIGNAL     1
 #define TEST_WAITCHAR   2
+#define TEST_RAWKEY     4
 
 /* params */
 static const char *TEMPLATE =
     "SIGNAL/S,"
     "WAITCHAR/S,"
+    "RAWKEY/S,"
     "WAITDELAY/N/K";
 typedef struct
 {
   ULONG signal;
   ULONG waitchar;
+  ULONG rawkey;
   ULONG *wait_delay;
 } params_t;
 static params_t params;
@@ -71,6 +74,41 @@ static void test_waitchar(ULONG wait_delay)
   SetMode(fh, 0); // cooked mode
 }
 
+static void test_rawkey(void)
+{
+  BPTR fh = Input();
+
+  SetMode(fh, 1); // raw mode
+
+  PutStr("Enter key...\n");
+  UBYTE key[8];
+  int n = Read(fh, &key, 7);
+  for(int i=0;i<n;i++) {
+    Printf("got: %ld@0x%lx\n", i, (ULONG)key[i]);
+  }
+
+  SetMode(fh, 0); // cooked mode
+
+  // show any signal present
+  ULONG wait_mask = SIGBREAKF_CTRL_C | SIGBREAKF_CTRL_D | SIGBREAKF_CTRL_E | SIGBREAKF_CTRL_F;
+  ULONG result = CheckSignal(wait_mask);
+
+  PutStr("You pressed ");
+  if(result & SIGBREAKF_CTRL_C) {
+    PutStr("Ctrl-C");
+  }
+  if(result & SIGBREAKF_CTRL_D) {
+    PutStr("Ctrl-D");
+  }
+  if(result & SIGBREAKF_CTRL_E) {
+    PutStr("Ctrl-E");
+  }
+  if(result & SIGBREAKF_CTRL_F) {
+    PutStr("Ctrl-F");
+  }
+  PutStr("\n");
+}
+
 int testclient(int test_modes, ULONG wait_delay)
 {
   if(test_modes & TEST_SIGNAL) {
@@ -78,6 +116,9 @@ int testclient(int test_modes, ULONG wait_delay)
   }
   if(test_modes & TEST_WAITCHAR) {
     test_waitchar(wait_delay);
+  }
+  if(test_modes & TEST_RAWKEY) {
+    test_rawkey();
   }
 
   return RETURN_OK;
@@ -112,6 +153,9 @@ int main(void)
   }
   if(params.waitchar) {
     test_modes |= TEST_WAITCHAR;
+  }
+  if(params.rawkey) {
+    test_modes |= TEST_RAWKEY;
   }
 
   result = testclient(test_modes, wait_delay);

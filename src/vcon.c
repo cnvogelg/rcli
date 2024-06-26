@@ -266,7 +266,7 @@ static void handle_dos_pkt(vcon_handle_t *sh, struct Message *msg)
       LOG(("vcon: SCREEN_MODE: mode=%ld\n", mode));
       sh->buffer_mode = mode;
       /* send mode vmsg */
-      vmsg = alloc_vmsg(sh, VCON_MSG_MODE, NULL, 0, pkt);
+      vmsg = alloc_vmsg(sh, VCON_MSG_BUFFER_MODE, NULL, 0, pkt);
       if(vmsg != NULL) {
         PutMsg(sh->user_port, (struct Message *)vmsg);
         do_reply = FALSE;

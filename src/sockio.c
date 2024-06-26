@@ -2,30 +2,38 @@
 
 #include <proto/exec.h>
 #include <proto/socket.h>
+#include <clib/alib_protos.h>
 
 #include <sys/ioctl.h>
 #include <netinet/tcp.h>
 
-//#define LOG_ENABLED
+#define LOG_ENABLED
 #include "log.h"
 #include "sockio.h"
+#include "listutil.h"
+#include "timer.h"
+
+#define SOCKIO_MSG_FREE     0xff
 
 struct sockio_handle {
-  int socket;
-
-  buf_t *rx_buffer;
-  buf_t *tx_buffer;
-
-  ULONG rx_min_size;
-
-  ULONG rx_actual;
-  ULONG tx_actual;
-
-  BOOL  waiting_for_char;
-  BOOL  got_char;
+  int               socket;
+  struct MsgPort   *user_port;
+  struct MsgPort   *msg_port;
+  struct List       free_list;
+  struct List       recv_list;
+  struct List       send_list;
+  struct List       wait_list;
+  sockio_msg_t     *msgs;
+  timer_handle_t   *timer;
+  ULONG             max_msgs;
+  ULONG             rx_actual;
+  ULONG             tx_actual;
+  ULONG             msg_mask;
+  ULONG             timer_mask;
+  ULONG             state;
 };
 
-sockio_handle_t *sockio_init(int socket)
+sockio_handle_t *sockio_init(int socket, struct MsgPort *user_port, ULONG max_msgs)
 {
   sockio_handle_t *sio = (sockio_handle_t *)AllocVec(sizeof(sockio_handle_t), MEMF_ANY | MEMF_CLEAR);
   if(sio == NULL) {
@@ -33,6 +41,14 @@ sockio_handle_t *sockio_init(int socket)
   }
 
   sio->socket = socket;
+  sio->user_port = user_port;
+  sio->max_msgs = max_msgs;
+  sio->state = SOCKIO_STATE_OK;
+
+  NewList(&sio->free_list);
+  NewList(&sio->recv_list);
+  NewList(&sio->send_list);
+  NewList(&sio->wait_list);
 
   // make socket non blocking
   ULONG yes=TRUE;
@@ -41,7 +57,54 @@ sockio_handle_t *sockio_init(int socket)
   // no delay
   setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(ULONG));
 
+  // msg port
+  sio->msg_port = CreateMsgPort();
+  if(sio->msg_port == NULL) {
+    goto fail;
+  }
+  sio->msg_mask = 1 << sio->msg_port->mp_SigBit;
+
+  // alloc msgs
+  ULONG msg_size = sizeof(sockio_msg_t) + 3 & ~3;
+  ULONG size = msg_size * max_msgs;
+  sio->msgs = AllocVec(size, MEMF_CLEAR | MEMF_ANY);
+  if(sio->msgs == NULL) {
+    goto fail;
+  }
+
+  // build free list of messages
+  for(ULONG i=0;i<max_msgs;i++) {
+    AddTail(&sio->free_list, (struct Node *)&sio->msgs[i]);
+    sio->msgs[i].type = SOCKIO_MSG_FREE;
+  }
+
+  // setup timer
+  sio->timer = timer_init();
+  if(sio->timer == NULL) {
+    goto fail;
+  }
+  sio->timer_mask = timer_get_sig_mask(sio->timer);
+
+  // all ok
   return sio;
+
+fail:
+  sockio_exit(sio);
+  return NULL;
+}
+
+static void cleanup(sockio_handle_t *sio)
+{
+  // stop timers in wait list
+  struct Node *node = GetHead(&sio->wait_list);
+  while(node != NULL) {
+    sockio_msg_t *msg = (sockio_msg_t *)node;
+    timer_job_t *job = (timer_job_t *)msg->buffer.data;
+    LOG(("sockio: cleanup wait msg %lx -> job %lx\n", msg, job));
+    timer_stop(job);
+
+    node = GetSucc(node);
+  }
 }
 
 void sockio_exit(sockio_handle_t *sio)
@@ -50,7 +113,84 @@ void sockio_exit(sockio_handle_t *sio)
     return;
   }
 
+  cleanup(sio);
+
+  if(sio->timer != NULL) {
+    timer_exit(sio->timer);
+  }
+
+  if(sio->msgs != NULL) {
+    FreeVec(sio->msgs);
+  }
+
+  if(sio->msg_port != NULL) {
+    DeleteMsgPort(sio->msg_port);
+  }
+
   FreeVec(sio);
+}
+
+static sockio_msg_t *alloc_msg(sockio_handle_t *sio, UBYTE type, APTR data, ULONG size, ULONG min_size)
+{
+  sockio_msg_t *msg = (sockio_msg_t *)RemHead(&sio->free_list);
+  if(msg == NULL) {
+    return NULL;
+  }
+
+  msg->msg.mn_ReplyPort = sio->user_port;
+  msg->type = type;
+  msg->buffer.data = data;
+  msg->buffer.size = size;
+  msg->min_size = min_size;
+  msg->private = NULL;
+
+  return msg;
+}
+
+void sockio_free_msg(sockio_handle_t *sio, sockio_msg_t *msg)
+{
+  // return to free list
+  LOG(("sockio: free msg: %lx\n", msg));
+  AddTail(&sio->free_list, (struct Node *)msg);
+  msg->type = SOCKIO_MSG_FREE;
+}
+
+static void handle_msg(sockio_handle_t *sio, sockio_msg_t *msg)
+{
+  LOG(("sockio: incoming msg: %lx: type=%ld\n", msg, (ULONG)msg->type));
+  switch(msg->type) {
+  case SOCKIO_MSG_RECV:
+    LOG(("sockio: add recv %lx\n", msg));
+    AddTail(&sio->recv_list, (struct Node *)msg);
+    break;
+  case SOCKIO_MSG_SEND:
+    LOG(("sockio: add send %lx\n", msg));
+    AddTail(&sio->send_list, (struct Node *)msg);
+    break;
+  case SOCKIO_MSG_WAIT_CHAR:
+    LOG(("sockio: add wait char %lx\n", msg));
+    AddTail(&sio->wait_list, (struct Node *)msg);
+    break;
+  }
+}
+
+static void handle_timer(sockio_handle_t *sio)
+{
+  timer_job_t *job;
+
+  while((job = timer_get_next_done_job(sio->timer)) != NULL) {
+    LOG(("sockio: TIMER STOP job %lx -> done!", job));
+    timer_stop(job);
+    // get msg
+    sockio_msg_t *msg = (sockio_msg_t *)timer_job_get_user_data(job);
+    LOG(("sockio: -> wait msg %lx\n", msg));
+    // clear wait flag
+    msg->buffer.size = 0;
+    // remove from wait list
+    Remove((struct Node *)msg);
+    // reply to user
+    ReplyMsg((struct Message *)msg);
+  }
 }
 
 /* wait for socket io or other signals and return SOCKIO_HANDLE flags */
@@ -58,15 +198,34 @@ ULONG sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
 {
   fd_set rx_fds;
   fd_set tx_fds;
-  buf_t *rx_buf = sio->rx_buffer;
-  buf_t *tx_buf = sio->tx_buffer;
+  sockio_msg_t *rx_msg = NULL;
+  sockio_msg_t *tx_msg = NULL;
+  sockio_msg_t *wait_msg = NULL;
+  buf_t *rx_buf = NULL;
+  buf_t *tx_buf = NULL;
+
+  // pick rx buffer (if any)
+  struct Node *rx_node = GetHead(&sio->recv_list);
+  if(rx_node != NULL) {
+    rx_msg = (sockio_msg_t *)rx_node;
+    rx_buf = &rx_msg->buffer;
+  }
+
+  // pick tx buffer (if any)
+  struct Node *tx_node = GetHead(&sio->send_list);
+  if(tx_node != NULL) {
+    tx_msg = (sockio_msg_t *)tx_node;
+    tx_buf = &tx_msg->buffer;
+  }
+
+  LOG(("sockio: WAIT rx_msg %lx tx_msg %lx\n", rx_msg, tx_msg));
 
   // prepare select
 
   // do we need to receive something?
   BOOL rx_pending = FALSE;
   FD_ZERO(&rx_fds);
-  if((rx_buf != NULL) && (sio->rx_actual < sio->rx_min_size)) {
+  if((rx_buf != NULL) && (sio->rx_actual < rx_msg->min_size)) {
     // wait for possible receiption
     FD_SET(sio->socket, &rx_fds);
     rx_pending = TRUE;
@@ -80,42 +239,74 @@ ULONG sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
     tx_pending = TRUE;
   }
 
-  // wait char handling
-  if(sio->waiting_for_char && !sio->got_char) {
+  // wait char handling: wait for read if wait list is not empty
+  BOOL wait_pending = FALSE;
+  struct Node *wait_node = GetHead(&sio->wait_list);
+  if(wait_node != NULL) {
+    wait_msg = (sockio_msg_t *)wait_node;
     FD_SET(sio->socket, &rx_fds);
+    wait_pending = TRUE;
   }
 
-  // pre-fill sigmask
-  ULONG got_mask = 0;
+  // pre-fill sigmask with our port bits
+  ULONG got_mask = sio->msg_mask | sio->timer_mask;
   if(sig_mask != NULL) {
-    got_mask = *sig_mask;
+    got_mask |= *sig_mask;
   }
 
   // do select and wait
-  LOG(("ENTER WAIT: mask=%lx rx_pend=%ld tx_pend=%ld\n", got_mask, (LONG)rx_pending, (LONG)tx_pending));
+  LOG(("sockio: ENTER WAIT: mask=%lx rx_pend=%ld tx_pend=%ld wait_pend=%ld\n",
+    got_mask, (LONG)rx_pending, (LONG)tx_pending, (LONG)wait_pending));
   long wait_result = WaitSelect(sio->socket + 1, &rx_fds, &tx_fds, NULL, NULL, &got_mask);
-  LOG(("LEAVE WAIT: res=%ld mask=%lx\n", wait_result, got_mask));
+  LOG(("sockio: LEAVE WAIT: res=%ld mask=%lx\n", wait_result, got_mask));
 
   // we got an error
   if(wait_result == -1) {
-    return SOCKIO_HANDLE_ERROR;
-  }
-  // some signal was hit
-  else if(wait_result == 0) {
-    *sig_mask = got_mask;
-    return SOCKIO_HANDLE_SIG_MASK;
+    sio->state = SOCKIO_STATE_ERROR;
+    return SOCKIO_STATE_ERROR;
   }
 
-  ULONG flags = 0;
+  // --- handle sig mask ---
+
+  // handle own msg port
+  if(got_mask & sio->msg_mask) {
+    // own msg
+    struct Message *msg;
+    while((msg = GetMsg(sio->msg_port)) != NULL) {
+      handle_msg(sio, (sockio_msg_t *)msg);
+    }
+  }
+
+  // handle timer
+  if(got_mask & sio->timer_mask) {
+    handle_timer(sio);
+  }
+
+  // update mask (without our bits)
+  if(sig_mask != NULL) {
+    *sig_mask = got_mask & ~(sio->msg_mask | sio->timer_mask);
+  }
+
+  // end now. since only signals occurred
+  if(wait_result == 0) {
+    LOG(("sockio: wait RETURN ONLY SIGMASK %lx\n", got_mask));
+    return SOCKIO_STATE_OK;
+  }
 
   // handle wait char
-  if(sio->waiting_for_char) {
-    if(FD_ISSET(sio->socket, &rx_fds) && !sio->got_char) {
-      sio->got_char = TRUE;
-      LOG(("WAIT CHAR: got it!\n"));
-    }
-    if(sio->got_char) {
-      flags |= SOCKIO_HANDLE_WAIT_CHAR;
+  if(wait_msg != NULL) {
+    if(FD_ISSET(sio->socket, &rx_fds)) {
+      LOG(("sockio: WAIT CHAR: got it! -> msg %lx\n", wait_msg));
+      // set flag
+      wait_msg->buffer.size = 1; // TODO: should be number of lines available
+      // remove from wait list
+      Remove((struct Node *)wait_msg);
+      // get and stop job
+      timer_job_t *job = (timer_job_t *)wait_msg->buffer.data;
+      LOG(("sockio: TIMER stop job %lx\n", job));
+      timer_stop(job);
+      // reply to user
+      ReplyMsg((struct Message *)wait_msg);
     }
   }
 
@@ -125,30 +316,38 @@ ULONG sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
       // try to read in missing bytes
       ULONG rx_size = rx_buf->size - sio->rx_actual;
       UBYTE *ptr = rx_buf->data + sio->rx_actual;
-      LOG(("RX READY! recv up to %ld bytes (actual %ld)\n", rx_size, sio->rx_actual));
+      LOG(("sockio: RX READY! recv up to %ld bytes (actual %ld)\n", rx_size, sio->rx_actual));
       long res = recv(sio->socket, ptr, rx_size, 0);
-      LOG(("RX RESULT: %ld\n", res));
+      LOG(("sockio: RX RESULT: %ld\n", res));
       if(res == -1) {
         // on EAGAIN simply repeat in next handle call
         if(Errno() != EAGAIN) {
-          LOG(("RX ERROR: errno=%ld\n", Errno()));
-          return SOCKIO_HANDLE_ERROR;
+          LOG(("sockio: RX ERROR: errno=%ld\n", Errno()));
+          sio->state = SOCKIO_STATE_ERROR;
         }
       }
       else if(res > 0) {
         // adjust buffer
         sio->rx_actual += res;
-        LOG(("RX DATA: new size=%ld\n", sio->rx_actual));
+        LOG(("sockio: RX DATA: new size=%ld\n", sio->rx_actual));
       }
       else {
-        LOG(("RX EOF!\n"));
-        flags |= SOCKIO_HANDLE_EOF;
+        LOG(("sockio: RX EOF!\n"));
+        sio->state = SOCKIO_STATE_EOF;
       }
     }
 
     // is rx done?
-    if(sio->rx_actual >= sio->rx_min_size) {
-      flags |= SOCKIO_HANDLE_RX_DONE;
+    if(sio->rx_actual >= rx_msg->min_size) {
+      // store actual size
+      rx_buf->size = sio->rx_actual;
+      LOG(("sockio: RX reply: %lx size=%ld\n", rx_msg, rx_buf->size));
+      // remove from recv list
+      RemHead(&sio->recv_list);
+      // clear actual
+      sio->rx_actual = 0;
+      // reply message
+      ReplyMsg((struct Message *)rx_msg);
     }
   }
 
@@ -157,112 +356,100 @@ ULONG sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
     if(FD_ISSET(sio->socket, &tx_fds) && tx_pending) {
       UBYTE *ptr = tx_buf->data + sio->tx_actual;
       ULONG tx_size = tx_buf->size - sio->tx_actual;
-      LOG(("TX READY! send %ld bytes (actual %ld)\n", tx_size, sio->tx_actual));
+      LOG(("sockio: TX READY! send %ld bytes (actual %ld)\n", tx_size, sio->tx_actual));
       long res = send(sio->socket, ptr, tx_size, 0);
-      LOG(("TX RESULT: %ld\n", res));
+      LOG(("sockio: TX RESULT: %ld\n", res));
       if(res == -1) {
         // on EAGAIN try in next handle call
         if(Errno() != EAGAIN) {
-          LOG(("TX ERROR: errno=%ld\n", Errno()));
-          return SOCKIO_HANDLE_ERROR;
+          LOG(("sockio: TX ERROR: errno=%ld\n", Errno()));
+          sio->state = SOCKIO_STATE_ERROR;
         }
       }
       else if(res > 0) {
         sio->tx_actual += res;
-        LOG(("TX_DATA: actual=%ld size=%ld\n", sio->tx_actual, tx_buf->size));
+        LOG(("sockio: TX_DATA: actual=%ld size=%ld\n", sio->tx_actual, tx_buf->size));
       }
       else {
-        LOG(("TX EOF!\n"));
-        flags |= SOCKIO_HANDLE_EOF;
+        LOG(("sockio: TX EOF!\n"));
+        sio->state = SOCKIO_STATE_EOF;
       }
     }
 
     // is tx done?
     if(tx_buf->size == sio->tx_actual) {
-      flags |= SOCKIO_HANDLE_TX_DONE;
+      LOG(("sockio: TX reply: %lx size=%ld", tx_msg, tx_buf->size));
+      // remove from send list
+      RemHead(&sio->send_list);
+      // clear actual
+      sio->tx_actual = 0;
+      // reply msg
+      ReplyMsg((struct Message *)tx_msg);
     }
   }
 
-  return flags;
+  LOG(("sockio: WAIT RETURN %ld\n", sio->state));
+  return sio->state;
 }
 
-/* submit RX buffer and receive up to buf->size bytes. */
-BOOL sockio_rx_begin(sockio_handle_t *sio, buf_t *buf, ULONG min_size)
+/* submit recv buffer and return msg (to wait for reply).
+   min_size allows to receive less data. 0=size */
+sockio_msg_t *sockio_recv(sockio_handle_t *sio, APTR buf, ULONG max_size, ULONG min_size)
 {
-  // already a buffer pending?
-  if(sio->rx_buffer != NULL) {
-    return FALSE;
+  sockio_msg_t *msg = alloc_msg(sio, SOCKIO_MSG_RECV, buf, max_size, min_size);
+  if(msg == NULL) {
+    LOG(("sockio: no recv msg!\n"));
+    return NULL;
   }
 
-  if(min_size == 0) {
-    min_size = buf->size;
+  LOG(("sockio: recv put msg %lx (buf=%lx, max_size=%ld, min_size=%ld)\n",
+    msg, buf, max_size, min_size));
+  PutMsg(sio->msg_port, (struct Message *)msg);
+  return msg;
+}
+
+/* submit send buffer and return msg (to wait for reply) */
+sockio_msg_t *sockio_send(sockio_handle_t *sio, APTR buf, ULONG size)
+{
+  sockio_msg_t *msg = alloc_msg(sio, SOCKIO_MSG_SEND, buf, size, size);
+  if(msg == NULL) {
+    LOG(("sockio: no send msg!\n"));
+    return NULL;
   }
 
-  sio->rx_buffer = buf;
-  sio->rx_min_size = min_size;
-  sio->rx_actual = 0;
-
-  return TRUE;
+  LOG(("sockio: send put msg %lx (buf=%lx, size=%ld)\n",
+    msg, buf, size));
+  PutMsg(sio->msg_port, (struct Message *)msg);
+  return msg;
 }
 
-/* after RX_DONE reclaim buffer and return actual size */
-buf_t *sockio_rx_end(sockio_handle_t *sio)
+/* submit wait char message */
+sockio_msg_t *sockio_wait_char(sockio_handle_t *sio, ULONG timeout_us)
 {
-  if(sio->rx_buffer == NULL) {
-    return 0;
+  sockio_msg_t *msg = alloc_msg(sio, SOCKIO_MSG_WAIT_CHAR, NULL, 0, 0);
+  if(msg == NULL) {
+    LOG(("sockio: no wait char msg!\n"));
+    return NULL;
   }
 
-  buf_t *buf = sio->rx_buffer;
-  buf->size = sio->rx_actual;
-
-  sio->rx_buffer = NULL;
-  sio->rx_min_size = 0;
-  sio->rx_actual = 0;
-
-  return buf;
-}
-
-/* --- TX --- */
-/* submit buffer with given size */
-BOOL sockio_tx_begin(sockio_handle_t *sio, buf_t *buf)
-{
-  // already a buffer pending?
-  if(sio->tx_buffer != NULL) {
-    return FALSE;
+  // split timeout in secs
+  ULONG secs = 0;
+  if(timeout_us > 1000000UL) {
+    secs = timeout_us / 1000000UL;
+    timeout_us %= 1000000UL;
   }
 
-  sio->tx_buffer = buf;
-  sio->tx_actual = 0;
+  // keep msg as user_data and fire up timer
+  timer_job_t *job = timer_start(sio->timer, secs, timeout_us, msg);
+  LOG(("sockio: TIMER start job %lx\n", job));
 
-  return TRUE;
+  // keep timeout in "min_size"
+  msg->min_size = timeout_us;
+  // buffer->data is used for timer job
+  msg->buffer.data = (UBYTE *)job;
+
+  LOG(("sockio: send wait char msg %lx (timeout_us=%ld)\n",
+    msg, timeout_us));
+  PutMsg(sio->msg_port, (struct Message *)msg);
+  return msg;
 }
-
-/* after TX_DONE reclaim buffer */
-buf_t *sockio_tx_end(sockio_handle_t *sio)
-{
-  buf_t *buf = sio->tx_buffer;
-
-  sio->tx_buffer = NULL;
-  sio->tx_actual = 0;
-
-  return buf;
-}
-
-/* start waiting for a char */
-BOOL sockio_wait_char_begin(sockio_handle_t *sio)
-{
-  if(sio->waiting_for_char) {
-    return FALSE;
-  }
-  sio->waiting_for_char = TRUE;
-  sio->got_char = FALSE;
-  return TRUE;
-}
-
-/* got a HANDLE_GOT_CHAR and confirm */
-void sockio_wait_char_end(sockio_handle_t *sio)
-{
-  sio->waiting_for_char = FALSE;
-  sio->got_char = FALSE;
-}
-

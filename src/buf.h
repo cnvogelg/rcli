@@ -4,7 +4,6 @@
 struct buf {
   UBYTE *data;
   LONG  size;
-  LONG  capacity; // used for allocation
 };
 typedef struct buf buf_t;
 
