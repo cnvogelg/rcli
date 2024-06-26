@@ -268,6 +268,7 @@ static void handle_dos_pkt(vcon_handle_t *sh, struct Message *msg)
       /* send mode vmsg */
       vmsg = alloc_vmsg(sh, VCON_MSG_BUFFER_MODE, NULL, 0, pkt);
       if(vmsg != NULL) {
+        vmsg->buffer_mode = mode;
         PutMsg(sh->user_port, (struct Message *)vmsg);
         do_reply = FALSE;
       } else {
@@ -280,10 +281,10 @@ static void handle_dos_pkt(vcon_handle_t *sh, struct Message *msg)
       LOG(("vcon: DISK_INFO\n"));
       struct InfoData *id = (struct InfoData *)BADDR((BPTR)pkt->dp_Arg1);
       if(id != NULL) {
-        LOG(("id_DiskType %lx\n", id->id_DiskType));
+        LOG(("vcon: got id_DiskType %lx\n", id->id_DiskType));
       }
       ULONG mode;
-      if(sh->buffer_mode == 0) { // cooked
+      if(sh->buffer_mode != 1) { // cooked/medium
         id->id_DiskType = 0x434f4e00; // CON\0
       }
       else {
@@ -292,6 +293,10 @@ static void handle_dos_pkt(vcon_handle_t *sh, struct Message *msg)
       id->id_VolumeNode = 0; // no intuition window
       id->id_InUse = 0; // no IOReq
       break;
+    }
+    case ACTION_UNDISK_INFO: {
+      LOG(("vcon: UNDISK_INFO\n"));
+      // ignore
     }
     case ACTION_WRITE: {
       APTR buf = (APTR)pkt->dp_Arg2;

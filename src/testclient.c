@@ -12,18 +12,21 @@ struct DosLibrary *DOSBase;
 #define TEST_SIGNAL     1
 #define TEST_WAITCHAR   2
 #define TEST_RAWKEY     4
+#define TEST_INFO       8
 
 /* params */
 static const char *TEMPLATE =
     "SIGNAL/S,"
     "WAITCHAR/S,"
     "RAWKEY/S,"
+    "INFO/S,"
     "WAITDELAY/N/K";
 typedef struct
 {
   ULONG signal;
   ULONG waitchar;
   ULONG rawkey;
+  ULONG info;
   ULONG *wait_delay;
 } params_t;
 static params_t params;
@@ -109,6 +112,38 @@ static void test_rawkey(void)
   PutStr("\n");
 }
 
+
+static void test_info(void)
+{
+  BPTR fh = Input();
+  struct InfoData *id;
+
+  Printf("getting info...\n");
+  id = (struct InfoData *)AllocVec(sizeof(struct InfoData), MEMF_ANY | MEMF_CLEAR);
+  if(id == NULL) {
+    Printf("NO MEM!\n");
+    return;
+  }
+
+  // get handler port from file handle
+  struct MsgPort *port = ((struct FileHandle *)BADDR(fh))->fh_Type;
+
+  // run through modes
+  for(int i=0;i<3;i++) {
+    Printf("SetMode(%ld)\n", i);
+    BOOL ok = SetMode(fh, i);
+    if(ok) {
+      DoPkt(port, ACTION_DISK_INFO, MKBADDR(id), 0, 0, 0, 0);
+
+      Printf("Info: id_DiskType=%08lx\n", id->id_DiskType);
+
+      DoPkt(port, ACTION_UNDISK_INFO, 0, 0, 0, 0, 0);
+    }
+  }
+
+  FreeVec(id);
+}
+
 int testclient(int test_modes, ULONG wait_delay)
 {
   if(test_modes & TEST_SIGNAL) {
@@ -119,6 +154,9 @@ int testclient(int test_modes, ULONG wait_delay)
   }
   if(test_modes & TEST_RAWKEY) {
     test_rawkey();
+  }
+  if(test_modes & TEST_INFO) {
+    test_info();
   }
 
   return RETURN_OK;
@@ -156,6 +194,9 @@ int main(void)
   }
   if(params.rawkey) {
     test_modes |= TEST_RAWKEY;
+  }
+  if(params.info) {
+    test_modes |= TEST_INFO;
   }
 
   result = testclient(test_modes, wait_delay);
