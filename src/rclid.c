@@ -24,15 +24,16 @@ extern struct Library *SocketBase;
 
 struct serv_data {
   int              socket;
+
   vcon_handle_t   *vcon;
   shell_handle_t  *shell;
   sockio_handle_t *sockio;
 
-  BOOL             rx_pending;
-  BOOL             tx_pending;
+  struct MsgPort  *sockio_port;
+  struct MsgPort  *vcon_port;
 
-  buf_t            rx_buf;
-  buf_t            tx_buf;
+  ULONG sockio_port_mask;
+  ULONG vcon_port_mask;
 };
 typedef struct serv_data serv_data_t;
 
@@ -42,23 +43,37 @@ void error_out(int socket, const char *msg)
   LOG(("ERROR_OUT: '%s' errno=%ld\n", msg, Errno()));
 }
 
-static BOOL init_rclid(serv_data_t *sd, int socket, ULONG shell_stack)
+static serv_data_t *init_rclid(int socket, ULONG shell_stack, ULONG max_msgs)
 {
+  serv_data_t *sd = (serv_data_t *)AllocVec(sizeof(serv_data_t), MEMF_CLEAR | MEMF_ANY);
+  if(sd == NULL) {
+    error_out(socket, "ERROR allocating seerver data!\n");
+    return NULL;
+  }
+
   // set socket lib options
   // disable SIGINT via Ctrl-C. we use sig mask for that
   long err = SocketBaseTags(SBTM_SETVAL(SBTC_BREAKMASK), 0, TAG_END);
   if(err != 0) {
     error_out(socket, "ERROR setting socket.lib options!\n");
-    return FALSE;
+    return NULL;
   }
 
   sd->socket = socket;
 
+  // create vcon port
+  sd->vcon_port = CreateMsgPort();
+  if(sd->vcon_port == NULL) {
+    error_out(socket, "ERROR create vcon port!\n");
+    return NULL;
+  }
+  sd->vcon_port_mask = 1 << sd->vcon_port->mp_SigBit;
+
   // setup virtual console for this sesion
-  vcon_handle_t *vcon = vcon_init();
+  vcon_handle_t *vcon = vcon_init(sd->vcon_port, max_msgs);
   if(vcon == NULL) {
     error_out(socket, "ERROR opening virtual console!\n");
-    return FALSE;
+    return NULL;
   }
   sd->vcon = vcon;
 
@@ -66,36 +81,55 @@ static BOOL init_rclid(serv_data_t *sd, int socket, ULONG shell_stack)
   BPTR fh = vcon_create_fh(vcon);
   shell_handle_t *sh = shell_init(fh, ZERO, NULL, shell_stack);
   if(sh == NULL) {
-    vcon_exit(vcon);
     error_out(socket, "ERROR opening shell!\n");
-    return FALSE;
+    return NULL;
   }
   sd->shell = sh;
 
+  // create sockio port
+  sd->sockio_port = CreateMsgPort();
+  if(sd->sockio_port == NULL) {
+    error_out(socket, "ERROR create sockio port!\n");
+    return NULL;
+  }
+  sd->sockio_port_mask = 1 << sd->sockio_port->mp_SigBit;
+
   // create sockio
-  sockio_handle_t *sockio = sockio_init(socket);
+  sockio_handle_t *sockio = sockio_init(socket, sd->sockio_port, max_msgs);
   if(sockio == NULL) {
-    vcon_exit(vcon);
-    shell_exit(sh);
     error_out(socket, "ERROR opening sockio!\n");
-    return FALSE;
+    return NULL;
   }
   sd->sockio = sockio;
+
+  return sd;
 }
 
 static void exit_rclid(serv_data_t *sd)
 {
-  if(sd->vcon != NULL) {
-    vcon_exit(sd->vcon);
-    sd->vcon = NULL;
+  if(sd == NULL) {
+    return;
+  }
+
+  if(sd->sockio != NULL) {
+    sockio_exit(sd->sockio);
+  }
+
+  if(sd->sockio_port != NULL) {
+    DeleteMsgPort(sd->sockio_port);
   }
 
   if(sd->shell != NULL) {
     shell_exit(sd->shell);
   }
 
-  if(sd->sockio != NULL) {
-    sockio_exit(sd->sockio);
+  if(sd->vcon != NULL) {
+    vcon_exit(sd->vcon);
+    sd->vcon = NULL;
+  }
+
+  if(sd->vcon_port != NULL) {
+    DeleteMsgPort(sd->vcon_port);
   }
 }
 
@@ -103,152 +137,189 @@ static void exit_rclid(serv_data_t *sd)
 #define HANDLE_ERROR  1
 #define HANDLE_END    2
 
-static int handle_vcon(serv_data_t *sd, ULONG got_con_mask)
+static int handle_vcon_msg(serv_data_t *sd, vcon_msg_t *vmsg)
 {
-  ULONG status = vcon_handle_sigmask(sd->vcon, got_con_mask);
-  LOG(("VCON handle: mask=%lx -> status=%lx\n", got_con_mask, status));
+  buf_t *buffer = &vmsg->buffer;
+  LOG(("rclid: got vcon msg: type=%ld pkt=%lx data=%lx size=%ld\n",
+    (LONG)vmsg->type, vmsg->private, buffer->data, buffer->size));
+  int result = HANDLE_OK;
+  BOOL reply = TRUE;
 
-  // console wants to read
-  if(status & VCON_HANDLE_READ) {
-    // not pending?
-    if(!sd->rx_pending) {
-      // start reading into rx buf
-      BOOL ok = vcon_read_begin(sd->vcon, &sd->rx_buf);
-      if(!ok) {
-        error_out(sd->socket, "ERROR: vcon_read_begin!\n");
-        return HANDLE_ERROR;
-      }
-
-      // start sockio read
-      ok = sockio_rx_begin(sd->sockio, &sd->rx_buf, 1); // at least 1 char up to full buffer
-      if(!ok) {
-        error_out(sd->socket, "ERROR: sockio_rx_begin!\n");
-        return HANDLE_ERROR;
-      }
-
-      sd->rx_pending = TRUE;
-
-      LOG(("VREAD: pending rx: size=%ld\n", sd->rx_buf.size));
+  switch(vmsg->type) {
+  case VCON_MSG_WRITE: {
+    // forward to sockio
+    sockio_msg_t *msg = sockio_send(sd->sockio, buffer->data, buffer->size);
+    if(msg == NULL) {
+      error_out(sd->socket, "Error in sockio_send!\n");
+      result = HANDLE_ERROR;
     } else {
-      LOG(("VREAD: already rx pending!\n"));
+      LOG(("rclid: got vcon write msg=%lx -> sockio: msg=%lx\n", vmsg, msg));
+      // remember associated vmsg (to reply later)
+      msg->user_data = vmsg;
+      reply = FALSE;
     }
+    break;
   }
 
-  // console wants to write
-  if(status & VCON_HANDLE_WRITE) {
-    // not pending?
-    if(!sd->tx_pending) {
-      // start writing into tx_buf
-      BOOL ok = vcon_write_begin(sd->vcon, &sd->tx_buf);
-      if(!ok) {
-        error_out(sd->socket, "ERROR: vcon_write_begin!\n");
-        return HANDLE_ERROR;
-      }
-
-      // start sockio write
-      ok = sockio_tx_begin(sd->sockio, &sd->tx_buf);
-      if(!ok) {
-        error_out(sd->socket, "ERROR: sockio_tx_begin!\n");
-        return HANDLE_ERROR;
-      }
-
-      sd->tx_pending = TRUE;
-
-      LOG(("VWRITE: pending tx: size=%ld\n", sd->tx_buf.size));
+  case VCON_MSG_READ: {
+    // start receiving from sockio (at least a byte)
+    sockio_msg_t *msg = sockio_recv(sd->sockio, buffer->data, buffer->size, 1);
+    if(msg == NULL) {
+      error_out(sd->socket, "Error in sockio_recv!\n");
+      result = HANDLE_ERROR;
     } else {
-      LOG(("VWRITE: already tx pending!\n"));
+      LOG(("rclid: got vcon read msg=%lx -> sockio: msg=%lx\n", vmsg, msg));
+      // remember associated vmsg (to reply later)
+      msg->user_data = vmsg;
+      reply = FALSE;
     }
+    break;
   }
-  if(status & VCON_HANDLE_WAIT_BEGIN) {
-    LOG(("VWAIT_CHAR: begin.\n"));
-    sockio_wait_char_begin(sd->sockio);
+
+  case VCON_MSG_BUFFER_MODE:
+    LOG(("rclid: BUFFER MODE=%ld\n", (LONG)vmsg->buffer_mode));
+    // TODO: send via 0xff cmd to sockio
+    break;
+
+  case VCON_MSG_WAIT_CHAR: {
+    ULONG timeout_us = buffer->size;
+    // start wait char in sockiot
+    sockio_msg_t *msg = sockio_wait_char(sd->sockio, timeout_us);
+    if(msg == NULL) {
+      error_out(sd->socket, "Error in sockio_wait_char!\n");
+      result = HANDLE_ERROR;
+    } else {
+      LOG(("rclid: got vcon wait char msg=%lx -> sockio: msg=%lx (timeout=%ld)\n", vmsg, msg, timeout_us));
+      // remember associated vmsg (to reply later)
+      msg->user_data = vmsg;
+      reply = FALSE;
+    }
+    break;
   }
-  if(status & VCON_HANDLE_WAIT_END) {
-    LOG(("VWAIT_CHAR: end.\n"));
-    sockio_wait_char_end(sd->sockio);
+
+  default:
+    LOG(("rclid: UNKNOWN vcon msg: %ld\n", (ULONG)vmsg->type));
+    break;
   }
-  if(status & VCON_HANDLE_CLOSE) {
-    LOG(("VCLOSE!\n"));
-    return HANDLE_END;
+
+  if(reply) {
+    LOG(("rclid: reply vmsg %lx\n", vmsg));
+    ReplyMsg((struct Message *)vmsg);
+  }
+
+  return result;
+}
+
+static int handle_sockio_msg(serv_data_t *sd, sockio_msg_t *msg)
+{
+  LOG(("rclid: got sockio msg: type=%ld\n", (LONG)msg->type));
+  buf_t *buffer = &msg->buffer;
+  vcon_msg_t *vmsg = (vcon_msg_t *)msg->user_data;
+
+  switch(msg->type) {
+  case SOCKIO_MSG_RECV:
+    LOG(("rclid: sockio recv done: msg=%lx -> vmsg=%lx (size=%ld)\n", msg, vmsg, buffer->size));
+    vmsg->buffer.size = buffer->size;
+    break;
+  case SOCKIO_MSG_SEND:
+    LOG(("rclid: sockio send done: msg=%lx -> vmsg=%lx (size=%ld)\n", msg, vmsg, buffer->size));
+    break;
+  case SOCKIO_MSG_WAIT_CHAR: {
+    // get result:
+    ULONG got_char = buffer->size;
+    LOG(("rclid: sockio wait_char done: msg=%lx -> vmsg=%lx (got_char=%ld)\n", msg, vmsg, got_char));
+    vmsg->buffer.size = got_char;
+    break;
+  }
+  default:
+    LOG(("rclid: unknown sockio msg!\n"));
+    return HANDLE_ERROR;
+  }
+
+  // finish sockio msg
+  sockio_free_msg(sd->sockio, msg);
+
+  // if a vmsg was attached then reply it
+  if(vmsg != NULL) {
+    LOG(("rclid: reply vmsg %lx\n", vmsg));
+    ReplyMsg((struct Message *)vmsg);
   }
 
   return HANDLE_OK;
 }
 
-
 static BOOL main_loop(serv_data_t *sd)
 {
   ULONG shell_mask = shell_exit_mask(sd->shell);
-  ULONG con_mask = vcon_get_sigmask(sd->vcon);
-  ULONG masks = shell_mask | con_mask | SIGBREAKF_CTRL_C;
+  ULONG vcon_mask = vcon_get_sigmask(sd->vcon);
+  ULONG vport_mask = sd->vcon_port_mask;
+  ULONG sport_mask = sd->sockio_port_mask;
+  ULONG masks = shell_mask | vcon_mask | vport_mask | sport_mask | SIGBREAKF_CTRL_C;
 
   while(1) {
 
     // wait/select/handle sockio
     ULONG sig_mask = masks;
-    ULONG flags = sockio_wait_handle(sd->sockio, &sig_mask);
-    LOG(("SOCKIO: handle flags=%lx\n", flags));
+    LOG(("rclid: wait begin: sig_mask=%lx\n", sig_mask));
+    ULONG state = sockio_wait_handle(sd->sockio, &sig_mask);
+    LOG(("rclid: wait return: state=%lx sig_mask=%lx\n", state, sig_mask));
 
-    // sockio I/O error
-    if(flags & SOCKIO_HANDLE_ERROR) {
-      error_out(sd->socket, "IO error!\n");
+    // sockio failed
+    if(state == SOCKIO_STATE_ERROR) {
+      error_out(sd->socket, "ERROR: sockio!\n");
+      break;
+    }
+    // sockio detected EOF
+    else if(state == SOCKIO_STATE_EOF) {
+      LOG(("rclid: EOF (sockio)\n"));
       return FALSE;
     }
 
-    // sockio detected EOF
-    if(flags & SOCKIO_HANDLE_EOF) {
-      LOG(("SOCKIO: EOF!\n"));
-      break;
+    // break in server console window
+    if(sig_mask & SIGBREAKF_CTRL_C) {
+      PutStr("*BREAK!\n");
+      return FALSE;
     }
 
-    // sockio got signal
-    if(flags & SOCKIO_HANDLE_SIG_MASK) {
-      // handle signals
-      if(sig_mask & shell_mask) {
-        LOG(("SHELL EXIT!\n"));
+    // do vcon
+    if(vcon_mask & sig_mask) {
+      LOG(("rclid: vcon mask\n"));
+      ULONG state = vcon_handle_sigmask(sd->vcon, sig_mask);
+      if(state == VCON_STATE_ERROR) {
+        error_out(sd->socket, "ERROR: vcon!\n");
+        break;
       }
-      if(sig_mask & SIGBREAKF_CTRL_C) {
-        PutStr("*BREAK!\n");
-        return FALSE;
+      else if(state == VCON_STATE_CLOSE) {
+        LOG(("rclid: CLOSE (vcon)\n"));
+        break;
       }
-      if(sig_mask & con_mask) {
-        int res = handle_vcon(sd, sig_mask & con_mask);
-        if(res == HANDLE_ERROR) {
-          return FALSE;
-        } else if(res == HANDLE_END) {
+    }
+
+    // incoming vcon message
+    if(vport_mask & sig_mask) {
+      LOG(("rclid: vcon incoming msgs\n"));
+      struct Message *msg;
+      while((msg = GetMsg(sd->vcon_port)) != NULL) {
+        int result = handle_vcon_msg(sd, (vcon_msg_t *)msg);
+        if(result == HANDLE_ERROR) {
+          error_out(sd->socket, "ERROR: vcon handle!\n");
           break;
         }
       }
     }
 
-    // sockio rx req is done
-    if(flags & SOCKIO_HANDLE_RX_DONE) {
-      buf_t *buf = sockio_rx_end(sd->sockio);
-      LOG(("SOCKIO: RX done=%ld\n", buf->size));
-
-      // submit to vcon
-      vcon_read_end(sd->vcon, &sd->rx_buf);
-
-      sd->rx_pending = FALSE;
+    // incoming sockio msg
+    if(sport_mask & sig_mask) {
+      LOG(("rclid: sockio incoming msgs\n"));
+      struct Message *msg;
+      while((msg = GetMsg(sd->sockio_port)) != NULL) {
+        int result = handle_sockio_msg(sd, (sockio_msg_t *)msg);
+        if(result == HANDLE_ERROR) {
+          error_out(sd->socket, "ERROR: sockio handle!\n");
+          break;
+        }
+      }
     }
-
-    // sockio tx req is done
-    if(flags & SOCKIO_HANDLE_TX_DONE) {
-      sockio_tx_end(sd->sockio);
-      LOG(("SOCKIO: TX done=%ld\n", sd->tx_buf.size));
-
-      // submit to vcon
-      vcon_write_end(sd->vcon, &sd->tx_buf);
-
-      sd->tx_pending = FALSE;
-    }
-
-    // sockio got char
-    if(flags & SOCKIO_HANDLE_WAIT_CHAR) {
-      LOG(("SOCKIO: got char!\n"));
-      vcon_wait_char_report(sd->vcon);
-    }
-
   }
 
   return TRUE;
@@ -261,22 +332,14 @@ int main(void)
     return RETURN_FAIL;
   }
 
-  serv_data_t *sd = (serv_data_t *)AllocVec(sizeof(serv_data_t), MEMF_CLEAR | MEMF_ANY);
-  if(sd == NULL) {
-    return RETURN_FAIL;
+  serv_data_t *sd = init_rclid(socket, 8192, 8);
+  if(sd != NULL) {
+    BOOL ok = main_loop(sd);
+    if(!ok) {
+      LOG(("clean up vcon!\n"));
+      vcon_cleanup(sd->vcon);
+    }
   }
-
-  BOOL ok = init_rclid(sd, socket, 8192);
-  if(!ok) {
-    return RETURN_FAIL;
-  }
-
-  ok = main_loop(sd);
-  if(!ok) {
-    LOG(("DROPPING vcon!\n"));
-    vcon_drop(sd->vcon);
-  }
-
   exit_rclid(sd);
 
   FreeVec(sd);

@@ -6,7 +6,7 @@
 struct sockio_msg
 {
   struct Message msg;
-  APTR           private;
+  APTR           user_data;
   buf_t          buffer;
   ULONG          min_size;
   UBYTE          type;

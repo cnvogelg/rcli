@@ -11,7 +11,7 @@ $(eval $(call def_tool,TESTSHELL,testshell,shell.c))
 $(eval $(call def_tool,TESTVCON,testvcon,shell.c vcon.c timer.c))
 $(eval $(call def_tool,TESTTIMER,testtimer,timer.c))
 $(eval $(call def_tool,TESTCLIENT,testclient))
-$(eval $(call def_tool,TESTSOCKIO,testsockio,sockio.c serv.c))
+$(eval $(call def_tool,TESTSOCKIO,testsockio,sockio.c serv.c timer.c))
 
 # ----- tools -----
 .PHONY: all $(TOOLS)

@@ -7,7 +7,7 @@
 #include <sys/ioctl.h>
 #include <netinet/tcp.h>
 
-#define LOG_ENABLED
+//#define LOG_ENABLED
 #include "log.h"
 #include "sockio.h"
 #include "listutil.h"
@@ -142,7 +142,7 @@ static sockio_msg_t *alloc_msg(sockio_handle_t *sio, UBYTE type, APTR data, ULON
   msg->buffer.data = data;
   msg->buffer.size = size;
   msg->min_size = min_size;
-  msg->private = NULL;
+  msg->user_data = NULL;
 
   return msg;
 }
@@ -298,7 +298,7 @@ ULONG sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
     if(FD_ISSET(sio->socket, &rx_fds)) {
       LOG(("sockio: WAIT CHAR: got it! -> msg %lx\n", wait_msg));
       // set flag
-      wait_msg->buffer.size = 1; // TODO: should be number of lines available
+      wait_msg->buffer.size = 1;
       // remove from wait list
       Remove((struct Node *)wait_msg);
       // get and stop job

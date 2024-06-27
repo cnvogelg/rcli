@@ -9,7 +9,7 @@
 #include <dos/dostags.h>
 
 #define ZERO 0
-#define LOG_ENABLED
+//#define LOG_ENABLED
 
 #include "vcon.h"
 #include "log.h"
@@ -297,6 +297,7 @@ static void handle_dos_pkt(vcon_handle_t *sh, struct Message *msg)
     case ACTION_UNDISK_INFO: {
       LOG(("vcon: UNDISK_INFO\n"));
       // ignore
+      break;
     }
     case ACTION_WRITE: {
       APTR buf = (APTR)pkt->dp_Arg2;

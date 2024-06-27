@@ -15,6 +15,7 @@
 struct vcon_msg
 {
   struct Message msg;
+  APTR           user_data;
   APTR           private;
   buf_t          buffer;
   UBYTE          type;

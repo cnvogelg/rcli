@@ -57,8 +57,8 @@ static BOOL handle_msg(sockio_handle_t *sio, sockio_msg_t *msg)
     break;
   case SOCKIO_MSG_WAIT_CHAR: {
     // get result:
-    ULONG wait_lines = msg->buffer.size;
-    Printf("test: WAIT CHAR result: %ld lines\n", wait_lines);
+    ULONG got_char = msg->buffer.size;
+    Printf("test: WAIT CHAR result: got_char=%ld\n", got_char);
     wait_msg = NULL;
     break;
   }

@@ -163,7 +163,7 @@ int runserv(ULONG port, const char *service, ULONG stack)
       TAG_END);
 
     // wait for sync from service
-    PutStr("runserv: waiting for service to launch. Ctrl-C to break...\n");
+    PutStr("runserv: waiting for service to launch. Ctrl-C to break... (Ctrl-D to exit)\n");
     ULONG wait_mask = sync_mask | SIGBREAKF_CTRL_C;
     ULONG got_mask = Wait(wait_mask);
     if(got_mask & sync_mask) {
@@ -177,7 +177,7 @@ int runserv(ULONG port, const char *service, ULONG stack)
 
     // aborted...
     if(got_mask & SIGBREAKF_CTRL_C) {
-      PutStr("*Break\n");
+      PutStr("runserv: Break\n");
       break;
     }
   }
@@ -224,7 +224,7 @@ int main(void)
   if(params.port != NULL) {
     port = *params.port;
   } else {
-    port = 23;
+    port = 2323;
   }
 
   if(params.service != NULL) {
