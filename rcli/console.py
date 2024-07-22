@@ -18,20 +18,53 @@ class ControlChar(ConsoleElement):
     def __eq__(self, other):
         return self.char == other.char
 
+    def to_bytes(self, csi=False):
+        return self.char
+
 
 class ControlSeq(ConsoleElement):
-    def __init__(self, key, params=None):
+    def __init__(self, key, *params, special=None):
+        assert type(key) is str
         self.key = key
         self.params = params
+        self.special = special
 
     def __repr__(self):
-        return f"CtlSeq('{self.key}',{self.params})"
+        return f"CtlSeq('{self.key}',{self.params},{self.special})"
 
     def __str__(self):
-        return "<CSI>" + ";".join(str(self.params)) + str(self.key)
+        res = "<CSI>" + ";".join(str(self.params)) + str(self.key)
+        if self.special:
+            first = len(self.params) == 0
+            for key, val in enumerate(self.special):
+                if not first:
+                    res += ";"
+                res += key + str(val)
+        return res
 
     def __eq__(self, other):
         return self.key == other.key and self.params == other.params
+
+    def to_bytes(self, csi=False):
+        res = bytearray()
+        if csi:
+            res.append(0x9B)
+        else:
+            res.append(0x1B)
+            res.append(ord("["))
+        first = True
+        if self.params:
+            for p in self.params:
+                if not first:
+                    res.append(ord(";"))
+                if p is not None:
+                    res += str(p).encode("latin-1")
+                first = False
+        if self.special:
+            if not first:
+                res.append(ord(";"))
+        res.append(ord(self.key))
+        return bytes(res)
 
 
 class Text(ConsoleElement):
@@ -49,8 +82,14 @@ class Text(ConsoleElement):
     def __eq__(self, other):
         return self.txt == other.txt
 
+    def to_bytes(self, csi=False):
+        return self.txt
+
 
 class SeqParser:
+    # characters for special params
+    SPECIAL = b">"
+
     def __init__(self, with_csi=True):
         self.with_csi = with_csi
         self.raw_bytes = bytearray()
@@ -58,6 +97,8 @@ class SeqParser:
         self.in_number = 0
         self.param_sign = 1
         self.cur_num = 0
+        self.special = {}
+        self.is_special = None
 
     def feed(self, b):
         """feed in a byte to the sequence.
@@ -76,7 +117,7 @@ class SeqParser:
             if len(self.params) == 0:
                 seq = ControlSeq(chr(b))
             else:
-                seq = ControlSeq(chr(b), self.params)
+                seq = ControlSeq(chr(b), *self.params)
             return [seq]
 
         # remember bytes if sequence gets aborted
@@ -97,6 +138,8 @@ class SeqParser:
                 pass
             elif b == ord(";"):
                 self._end_param()
+            elif b in self.SPECIAL:
+                self.is_special = b
             else:
                 # invalid char - abort sequence
                 return self._abort()
@@ -116,10 +159,15 @@ class SeqParser:
         return None
 
     def _end_param(self):
+        num = self.cur_num * self.param_sign
+        if self.is_special:
+            self.special[self.is_special] = num
+        else:
+            self.params.append(num)
         self.in_number = 0
-        self.params.append(self.cur_num * self.param_sign)
         self.cur_num = 0
         self.param_sign = 1
+        self.is_special = None
 
     def _abort(self):
         """write out all seq bytes unmodified"""

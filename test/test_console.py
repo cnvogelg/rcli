@@ -1,5 +1,32 @@
 from rcli.console import SeqParser, ControlSeq, ControlChar, Text, ConsoleStream
 
+# ----- control seq -----
+
+
+def test_ctlseq_no_param():
+    cs = ControlSeq("v")
+    assert cs.to_bytes(csi=True) == b"\x9bv"
+    assert cs.to_bytes(csi=False) == b"\x1b[v"
+
+
+def test_ctlseq_param():
+    cs = ControlSeq("v", 1)
+    assert cs.to_bytes(csi=True) == b"\x9b1v"
+    assert cs.to_bytes(csi=False) == b"\x1b[1v"
+
+
+def test_ctlseq_param_two():
+    cs = ControlSeq("v", 1, 42)
+    assert cs.to_bytes(csi=True) == b"\x9b1;42v"
+    assert cs.to_bytes(csi=False) == b"\x1b[1;42v"
+
+
+def test_ctlseq_param_skip():
+    cs = ControlSeq("v", None, 42)
+    assert cs.to_bytes(csi=True) == b"\x9b;42v"
+    assert cs.to_bytes(csi=False) == b"\x1b[;42v"
+
+
 # ----- seqparser -----
 
 
@@ -13,7 +40,7 @@ def test_seqparser_param():
     # param
     p = SeqParser()
     assert p.feed("1") is None
-    assert p.feed("H") == [ControlSeq("H", [1])]
+    assert p.feed("H") == [ControlSeq("H", 1)]
 
 
 def test_seqparser_param_pos_sign():
@@ -21,7 +48,7 @@ def test_seqparser_param_pos_sign():
     p = SeqParser()
     assert p.feed("+") is None
     assert p.feed("1") is None
-    assert p.feed("H") == [ControlSeq("H", [1])]
+    assert p.feed("H") == [ControlSeq("H", 1)]
 
 
 def test_seqparser_param_net_sign():
@@ -29,7 +56,7 @@ def test_seqparser_param_net_sign():
     p = SeqParser()
     assert p.feed("-") is None
     assert p.feed("5") is None
-    assert p.feed("H") == [ControlSeq("H", [-5])]
+    assert p.feed("H") == [ControlSeq("H", -5)]
 
 
 def test_seqparser_param_spaces():
@@ -38,7 +65,7 @@ def test_seqparser_param_spaces():
     assert p.feed(" ") is None
     assert p.feed("5") is None
     assert p.feed(" ") is None
-    assert p.feed("H") == [ControlSeq("H", [5])]
+    assert p.feed("H") == [ControlSeq("H", 5)]
 
 
 def test_seqparser_param_two():
@@ -48,7 +75,7 @@ def test_seqparser_param_two():
     assert p.feed("1") is None
     assert p.feed(";") is None
     assert p.feed("9") is None
-    assert p.feed("H") == [ControlSeq("H", [11, 9])]
+    assert p.feed("H") == [ControlSeq("H", 11, 9)]
 
 
 def test_seqparser_invalid_term():
@@ -63,6 +90,24 @@ def test_seqparser_invalid_term_param():
     assert p.feed("1") is None
     assert p.feed(" ") is None
     assert p.feed("?") == [ControlChar(0x9B), Text("1 ?")]
+
+
+def test_seqparser_param_special():
+    # 2 param
+    p = SeqParser()
+    assert p.feed(">") is None
+    assert p.feed("1") is None
+    assert p.feed("H") == [ControlSeq("H", special={">", 1})]
+
+
+def test_seqparser_param_special_norm():
+    # 2 param
+    p = SeqParser()
+    assert p.feed(">") is None
+    assert p.feed("1") is None
+    assert p.feed(";") is None
+    assert p.feed("9") is None
+    assert p.feed("H") == [ControlSeq("H", 9, special={">", 1})]
 
 
 # ----- constream -----
