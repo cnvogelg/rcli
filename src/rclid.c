@@ -34,7 +34,10 @@ struct serv_data {
 
   ULONG sockio_port_mask;
   ULONG vcon_port_mask;
+
+  UBYTE csi_buf[4];
 };
+
 typedef struct serv_data serv_data_t;
 
 void error_out(int socket, const char *msg)
@@ -176,10 +179,26 @@ static int handle_vcon_msg(serv_data_t *sd, vcon_msg_t *vmsg)
     break;
   }
 
-  case VCON_MSG_BUFFER_MODE:
+  case VCON_MSG_BUFFER_MODE: {
     LOG(("rclid: BUFFER MODE=%ld\n", (LONG)vmsg->buffer_mode));
-    // TODO: send via 0xff cmd to sockio
+    // prepare our own CSI to report the buffer mode
+    UBYTE *buf = sd->csi_buf;
+    buf[0] = 0x9b; // CSI
+    buf[1] = (UBYTE)vmsg->buffer_mode + '0';
+    buf[2] = 'V';
+    buf[3] = 0;
+    sockio_msg_t *msg = sockio_send(sd->sockio, buf, 4);
+    if(msg == NULL) {
+      error_out(sd->socket, "Error in sockio_send buffer mode!\n");
+      result = HANDLE_ERROR;
+    } else {
+      LOG(("rclid: got vcon write msg=%lx -> sockio: msg=%lx\n", vmsg, msg));
+      // remember associated vmsg (to reply later)
+      msg->user_data = vmsg;
+      reply = FALSE;
+    }
     break;
+  }
 
   case VCON_MSG_WAIT_CHAR: {
     ULONG timeout_us = buffer->size;
