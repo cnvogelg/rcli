@@ -13,18 +13,24 @@ def test_ctlseq_param():
     cs = ControlSeq("v", 1)
     assert cs.to_bytes(csi=True) == b"\x9b1v"
     assert cs.to_bytes(csi=False) == b"\x1b[1v"
+    assert cs.get_param(0) == 1
+    assert cs.get_param(1) == 0  # out of bounds
 
 
 def test_ctlseq_param_two():
     cs = ControlSeq("v", 1, 42)
     assert cs.to_bytes(csi=True) == b"\x9b1;42v"
     assert cs.to_bytes(csi=False) == b"\x1b[1;42v"
+    assert cs.get_param(0) == 1
+    assert cs.get_param(1) == 42
 
 
 def test_ctlseq_param_skip():
     cs = ControlSeq("v", None, 42)
     assert cs.to_bytes(csi=True) == b"\x9b;42v"
     assert cs.to_bytes(csi=False) == b"\x1b[;42v"
+    assert cs.get_param(0, 12) == 12
+    assert cs.get_param(1) == 42
 
 
 # ----- seqparser -----

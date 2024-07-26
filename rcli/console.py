@@ -45,6 +45,16 @@ class ControlSeq(ConsoleElement):
     def __eq__(self, other):
         return self.key == other.key and self.params == other.params
 
+    def get_param(self, pos, default=0):
+        if pos < len(self.params):
+            val = self.params[pos]
+            if val is None:
+                return default
+            else:
+                return val
+        else:
+            return default
+
     def to_bytes(self, csi=False):
         res = bytearray()
         if csi:
