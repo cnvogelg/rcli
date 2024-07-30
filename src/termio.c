@@ -70,6 +70,25 @@ static struct termio_key_code key_codes[] = {
 
 /* list of console codes */
 static struct termio_cmd_code cmd_codes[] = {
+  { "bell",         BELL, NULL },
+  { "backspace",    BACKSPACE, NULL },
+  { "hor_tab",      HOR_TAB, NULL },
+  { "line_feed",    LINE_FEED, NULL },
+  { "ver_tab",      VER_TAB, NULL },
+  { "form_feed",    FORM_FEED, NULL },
+  { "return",       RETURN, NULL },
+  { "shift_in",     SHIFT_IN, NULL },
+  { "shift_out",    SHIFT_OUT, NULL },
+
+  { "index",        INDEX, NULL },
+  { "next_line",    NEXT_LINE, NULL },
+  { "hor_tab_set",  HOR_TAB_SET, NULL },
+  { "rev_index",    REV_INDEX, NULL },
+
+  { "esc",          ESC, NULL },
+  { "csi",          CSI, NULL },
+
+  { "raw",          "", "s" },
   { "reset",        ESC "c", NULL },
 
   { "insert",       CSI "@", "n" },
@@ -329,12 +348,11 @@ LONG termio_expand_cmd_code(struct termio_cmd_code *code, const UBYTE **args,
   const UBYTE *seq = code->seq;
 
   /* copy CSI prefix of code */
-  if(*seq != CSI_CODE) {
-    return TERMIO_ERR_NO_CSI;
+  if(*seq == CSI_CODE) {
+    *buf++ = CSI_CODE;
+    seq++;
+    len++;
   }
-  *buf++ = CSI_CODE;
-  seq++;
-  len++;
 
   /* go through args */
   const UBYTE *params = code->params;

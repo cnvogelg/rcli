@@ -10,6 +10,21 @@
 #define ESC_CODE 0x1b
 #define CSI_CODE 0x9b
 
+#define BELL            "\x07"
+#define BACKSPACE       "\x08"
+#define HOR_TAB         "\x09"
+#define LINE_FEED       "\x0a"
+#define VER_TAB         "\x0b"
+#define FORM_FEED       "\x0c"
+#define RETURN          "\x0d"
+#define SHIFT_IN        "\x0e"
+#define SHIFT_OUT       "\x0f"
+
+#define INDEX           "\x84"
+#define NEXT_LINE       "\x85"
+#define HOR_TAB_SET     "\x88"
+#define REV_INDEX       "\x8d"
+
 #define TERMIO_MAX_CMD_ARGS 8
 
 #define TERMIO_OK                   0
