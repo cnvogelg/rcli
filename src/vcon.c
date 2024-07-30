@@ -114,17 +114,21 @@ void vcon_cleanup(vcon_handle_t *sh)
       LONG res2 = ERROR_NO_FREE_STORE;
       switch(vmsg->type) {
       case VCON_MSG_READ:
+        // signal EOF
         res1 = 0;
         res2 = 0;
         break;
       case VCON_MSG_WRITE:
-        res1 = 0;
+        // confirm full write
+        res1 = vmsg->buffer.size;
         res2 = 0;
         break;
       }
 
       LOG(("vcon: reply: pkt=%lx res1=%ld res2=%ld\n", pkt, res1, res2));
       ReplyPkt(pkt, res1, res2);
+
+      vmsg->type = VCON_MSG_FREE;
     }
   }
 }

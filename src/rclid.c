@@ -186,8 +186,7 @@ static int handle_vcon_msg(serv_data_t *sd, vcon_msg_t *vmsg)
     buf[0] = 0x9b; // CSI
     buf[1] = (UBYTE)vmsg->buffer_mode + '0';
     buf[2] = 'V';
-    buf[3] = 0;
-    sockio_msg_t *msg = sockio_send(sd->sockio, buf, 4);
+    sockio_msg_t *msg = sockio_send(sd->sockio, buf, 3);
     if(msg == NULL) {
       error_out(sd->socket, "Error in sockio_send buffer mode!\n");
       result = HANDLE_ERROR;
