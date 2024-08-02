@@ -64,18 +64,18 @@ static int tget(const UBYTE **cmd, LONG verbose)
     Printf("Special Key: '%s'\n", code->name);
   } else {
     struct termio_cmd_seq seq;
-    int len = termio_parse_csi(buffer, len, &seq);
-    if(len > 0) {
+    int res = termio_parse_csi(buffer, len, &seq);
+    if(res > 0) {
       Printf("CSI Seq: '%lc' (%ld bytes) args: ",
         (LONG)seq.cmd, (LONG)seq.len_bytes);
       for(UBYTE i=0;i<seq.num_args;i++) {
         Printf("%ld ", (LONG)seq.args[i]);
       }
       PutStr("\n");
-    } else if(len == TERMIO_ERR_NO_CSI) {
+    } else if(res == TERMIO_ERR_NO_CSI) {
       Printf("Normal Key: '%lc'\n", buffer[0]);
     } else {
-      Printf("CSI Parse Error: %ld\n", len);
+      Printf("CSI Parse Error: %ld\n", res);
     }
   }
 

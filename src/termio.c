@@ -191,7 +191,7 @@ int termio_parse_csi(const UBYTE *buf, LONG size, struct termio_cmd_seq *seq)
       buf++;
       size--;
     } else {
-      return -1;
+      return TERMIO_ERR_NO_CSI;
     }
   }
   else {
@@ -210,7 +210,7 @@ int termio_parse_csi(const UBYTE *buf, LONG size, struct termio_cmd_seq *seq)
     BOOL is_num = (ch >= '0') && (ch <= '9');
 
     // end param?
-    if((is_cmd || (is_sep)) && in_param) {
+    if((is_cmd || is_sep) && in_param) {
       // too many args..
       if(seq->num_args == TERMIO_MAX_CMD_ARGS) {
         return TERMIO_ERR_TOO_MANY_ARGS;
