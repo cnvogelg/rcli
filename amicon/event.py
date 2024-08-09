@@ -18,13 +18,13 @@ class CtlCharEvent(ConsoleEvent):
         self.char = char
 
     def __repr__(self):
-        return f"CtlChar({self.char})"
+        return f"CtlChar({self.char:02x})"
 
     def __eq__(self, other):
         return self.char == other.char
 
 
-class KeyValEvent(ConsoleEvent):
+class ParamEvent(ConsoleEvent):
     MODE = 0
 
     def __init__(self, key, val):
@@ -32,10 +32,23 @@ class KeyValEvent(ConsoleEvent):
         self.val = val
 
     def __repr__(self):
-        return f"KeyVal({self.key}, {self.val})"
+        return f"Param({self.key}, {self.val})"
 
     def __eq__(self, other):
         return self.key == other.key and self.val == other.val
+
+
+class CmdEvent(ConsoleEvent):
+    H_TAB_SET = 0
+
+    def __init__(self, cmd):
+        self.cmd = cmd
+
+    def __repr__(self):
+        return f"Cmd({self.cmd})"
+
+    def __eq__(self, other):
+        return self.cmd == other.cmd
 
 
 class CharAttrEvent(ConsoleEvent):
@@ -67,3 +80,15 @@ class ResizeEvent(ConsoleEvent):
 
     def __eq__(self, other):
         return self.w == other.w and self.h == other.h
+
+
+class MoveCursorEvent(ConsoleEvent):
+    def __init__(self, dx, dy):
+        self.dx = dx
+        self.dy = dy
+
+    def __repr__(self):
+        return f"MoveCursor({self.dx}, {self.dy})"
+
+    def __eq__(self, other):
+        return self.dx == other.dx and self.dy == other.dy

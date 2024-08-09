@@ -234,7 +234,7 @@ class ConsoleStream:
 
     def _add_byte(self, b):
         # is a control character
-        if b < 32:
+        if b < 32 or (b > 0x80 and b < 0x9F):
             result = []
             res = self._flush_text()
             if res:
@@ -283,13 +283,20 @@ class ConsoleStream:
                     extra_res = res
         # a single escape was found
         elif self.in_escape == 1:
-            # 7 bit CSI
-            if b == ord("["):
-                self.in_escape = 2
-                self.seq_parser = SeqParser(False)
-                need_flush = True
+            # map 7bit to 8bit char: ESC @ -> 0x80
+            if b >= 0x40 and b < 0x60:
+                b += 0x40
+                # CSI
+                if b == 0x9B:
+                    self.in_escape = 2
+                    self.seq_parser = SeqParser(False)
+                    need_flush = True
+                # other control char
+                else:
+                    self.in_escape = 0
+                    extra_res = [ControlChar(b)]
             else:
-                # no CSI - emit ESC and data
+                # no 7bit encoded 8 bit control - emit ESC and data
                 self.in_escape = 0
                 extra_res.append(ControlChar(0x1B))
                 res = self._add_byte(b)

@@ -3,9 +3,9 @@ class AmiControlChars:
 
     BELL = 0x07
     BACKSPACE = 0x08
-    HOR_TAB = 0x09
+    H_TAB = 0x09
     LINEFEED = 0x0A
-    VERTICAL_TAB = 0x0B
+    V_TAB = 0x0B
     FORMFEED = 0x0C
     RETURN = 0x0D
     SHIFT_IN = 0x0E
@@ -13,16 +13,16 @@ class AmiControlChars:
     ESC = 0x1B
     INDEX = 0x84
     NEXT_LINE = 0x85
-    HOR_TAB_SET = 0x88
-    REVERSE_INDEX = 0x8D
+    H_TAB_SET = 0x88
+    REV_INDEX = 0x8D
     CSI = 0x9B
 
     valid_control_chars = (
         BELL,
         BACKSPACE,
-        HOR_TAB,
+        H_TAB,
         LINEFEED,
-        VERTICAL_TAB,
+        V_TAB,
         FORMFEED,
         RETURN,
         SHIFT_IN,
@@ -30,8 +30,8 @@ class AmiControlChars:
         ESC,
         INDEX,
         NEXT_LINE,
-        HOR_TAB_SET,
-        REVERSE_INDEX,
+        H_TAB_SET,
+        REV_INDEX,
         CSI,
     )
 

@@ -5,9 +5,11 @@ from amicon.stream import ConsoleStream, Text, ControlSeq, ControlChar
 from amicon.event import (
     TextEvent,
     CtlCharEvent,
-    KeyValEvent,
+    ParamEvent,
+    CmdEvent,
     ResizeEvent,
     CharAttrEvent,
+    MoveCursorEvent,
 )
 from amicon.const import AmiControlChars as cc
 
@@ -22,6 +24,7 @@ class AmiConsole:
     def __init__(self, backend: AmiConsoleBackend):
         self.stream = ConsoleStream()
         self.backend = backend
+        self.shifted = False
 
     def resize(self, w, h):
         logging.debug("resize w=%d h=%d", w, h)
@@ -35,8 +38,13 @@ class AmiConsole:
                 out_ev = None
                 logging.debug("got event: %r", ev)
                 if type(ev) is Text:
-                    out_ev = TextEvent(ev.txt)
+                    if self.shifted:
+                        txt = self._shift_txt(ev.txt)
+                    else:
+                        txt = ev.txt
+                    out_ev = TextEvent(txt)
                 elif type(ev) is ControlChar:
+                    logging.debug("control char: %02x", ev.char)
                     out_ev = self._handle_ctl_char(ev.char)
                 elif type(ev) is ControlSeq:
                     out_ev = self._handle_ctl_seq(ev)
@@ -46,8 +54,29 @@ class AmiConsole:
                     logging.debug("out event: %r", out_ev)
                     self.backend.handle_event(out_ev)
 
+    def _shift_txt(self, txt):
+        b = bytearray()
+        for t in txt:
+            if t < 0x80:
+                b.append(t + 0x80)
+            else:
+                b.append(t)
+        return bytes(b)
+
     def _handle_ctl_char(self, char):
-        if char in cc.valid_control_chars:
+        if char == cc.SHIFT_IN:
+            self.shifted = True
+        elif char == cc.SHIFT_OUT:
+            self.shifted = False
+        elif char == cc.INDEX:
+            return MoveCursorEvent(0, 1)
+        elif char == cc.REV_INDEX:
+            return MoveCursorEvent(0, -1)
+        elif char == cc.NEXT_LINE:
+            return CtlCharEvent(cc.LINEFEED)
+        elif char == cc.H_TAB_SET:
+            return CmdEvent(CmdEvent.H_TAB_SET)
+        elif char in cc.valid_control_chars:
             return CtlCharEvent(char)
         else:
             logging.info("unknown char: %r", char)
@@ -57,7 +86,7 @@ class AmiConsole:
         if key == "V":  # our custom set mode command
             mode = seq.get_param(0)
             logging.debug("set mode: %d", mode)
-            return KeyValEvent(KeyValEvent.MODE, mode)
+            return ParamEvent(ParamEvent.MODE, mode)
         elif key == "m":  # char attributes
             logging.debug("raw char attr: %r", seq)
             return self._handle_char_attr(

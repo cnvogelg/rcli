@@ -157,6 +157,13 @@ def test_amicon_stream_esc_no_seq():
     assert s.flush() == [Text("a")]
 
 
+def test_amicon_stream_esc_8bit():
+    s = ConsoleStream()
+    # map ESC + 7bit -> 8bit control char
+    assert s.feed_bytes(b"\x1b@") == [ControlChar(0x80)]
+    assert s.feed_bytes(b"\x1b[") is None  # CSI waits for following chars
+
+
 def test_amicon_stream_esc_seq():
     s = ConsoleStream()
     assert s.feed_bytes(b"\x1b[a") == [ControlSeq("a")]
