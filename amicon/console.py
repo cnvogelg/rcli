@@ -1,15 +1,15 @@
 from abc import ABC, abstractmethod
 import logging
 
-from rcli.console import ConsoleStream, Text, ControlSeq, ControlChar
-from rcli.event import (
+from amicon.stream import ConsoleStream, Text, ControlSeq, ControlChar
+from amicon.event import (
     TextEvent,
     CtlCharEvent,
     KeyValEvent,
     ResizeEvent,
     CharAttrEvent,
 )
-from rcli.const import AmiControlChars as cc
+from amicon.const import AmiControlChars as cc
 
 
 class AmiConsoleBackend(ABC):
