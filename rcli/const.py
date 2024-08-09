@@ -37,5 +37,5 @@ class AmiControlChars:
 
 
 class AmiKeys:
-    CSI = 0x9B
+    CSI = b"\x9B"
     F1 = CSI + b"0~"

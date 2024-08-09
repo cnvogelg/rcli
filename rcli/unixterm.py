@@ -1,20 +1,38 @@
+import sys
+import os
 import curses
+
+from rcli.amicon import AmiConsoleBackend
 
 
 class UnixTerm:
     def __init__(self):
         self.win = curses.initscr()
-        curses.noecho()
-        curses.cbreak()
-        # self.win.keypad(True)
+        self.win.keypad(True)
         print("term=", curses.termname())
-        print(curses.tigetstr("sc"))
+
+    def get_fd(self):
+        return sys.stdin.fileno()
 
     def exit(self):
-        # self.win.keypad(False)
+        self.mode_line()
+        curses.endwin()
+
+    def mode_raw(self):
+        curses.noecho()
+        curses.cbreak()
+
+    def mode_line(self):
         curses.nocbreak()
         curses.echo()
-        curses.endwin()
+
+
+class UnixConsoleBackend(AmiConsoleBackend):
+    def __init__(self, term: UnixTerm):
+        self.term = term
+
+    def write_text(self, txt):
+        os.write(self.term.get_fd(), txt)
 
 
 if __name__ == "__main__":

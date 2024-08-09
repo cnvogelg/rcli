@@ -33,17 +33,25 @@ class ControlSeq(ConsoleElement):
         return f"CtlSeq('{self.key}',{self.params},{self.special})"
 
     def __str__(self):
-        res = "<CSI>" + ";".join(str(self.params)) + str(self.key)
+        res = "<CSI>" + ";".join(str(self.params))
         if self.special:
             first = len(self.params) == 0
             for key, val in enumerate(self.special):
                 if not first:
                     res += ";"
                 res += key + str(val)
+                first = False
+        res += str(self.key)
         return res
 
     def __eq__(self, other):
         return self.key == other.key and self.params == other.params
+
+    def get_key(self):
+        return self.key
+
+    def get_num_params(self):
+        return len(self.params)
 
     def get_param(self, pos, default=0):
         if pos < len(self.params):
@@ -54,6 +62,22 @@ class ControlSeq(ConsoleElement):
                 return val
         else:
             return default
+
+    def get_all_params(self, default=0):
+        result = []
+        for i in range(len(self.params)):
+            result.append(self.get_param(i, default))
+        return result
+
+    def get_special(self, key, default=0):
+        assert type(key) is str
+        if not self.special:
+            return default
+        val = self.special.get(key)
+        if not val:
+            return default
+        else:
+            return val
 
     def to_bytes(self, csi=False):
         res = bytearray()
@@ -71,8 +95,12 @@ class ControlSeq(ConsoleElement):
                     res += str(p).encode("latin-1")
                 first = False
         if self.special:
-            if not first:
-                res.append(ord(";"))
+            for key, val in self.special.items():
+                if not first:
+                    res.append(ord(";"))
+                res.append(ord(key))
+                res += str(val).encode("latin-1")
+                first = False
         res.append(ord(self.key))
         return bytes(res)
 
@@ -87,7 +115,7 @@ class Text(ConsoleElement):
         return f"ConTxt({self.txt})"
 
     def __str__(self):
-        return self.txt
+        return self.txt.decode("latin-1")
 
     def __eq__(self, other):
         return self.txt == other.txt
@@ -125,9 +153,9 @@ class SeqParser:
                 self._end_param()
 
             if len(self.params) == 0:
-                seq = ControlSeq(chr(b))
+                seq = ControlSeq(chr(b), special=self.special)
             else:
-                seq = ControlSeq(chr(b), *self.params)
+                seq = ControlSeq(chr(b), *self.params, special=self.special)
             return [seq]
 
         # remember bytes if sequence gets aborted
@@ -149,7 +177,7 @@ class SeqParser:
             elif b == ord(";"):
                 self._end_param()
             elif b in self.SPECIAL:
-                self.is_special = b
+                self.is_special = chr(b)
             else:
                 # invalid char - abort sequence
                 return self._abort()
@@ -217,8 +245,10 @@ class ConsoleStream:
             self.text.append(b)
 
     def feed_bytes(self, data):
+        # convenience: if you pass a string convert it first
         if type(data) is str:
             data = data.encode("latin-1")
+
         result = []
         for b in data:
             res = self.feed(b)
@@ -233,6 +263,10 @@ class ConsoleStream:
         if type(b) is str:
             b = ord(b[0])
         assert type(b) is int
+
+        need_flush = False
+        extra_res = []
+
         # out of escape sequence
         if self.in_escape == 0:
             # esc may start a sequence
@@ -242,24 +276,25 @@ class ConsoleStream:
             elif b == 0x9B:
                 self.in_escape = 2
                 self.seq_parser = SeqParser(True)
+                need_flush = True
             else:
                 res = self._add_byte(b)
                 if res:
-                    return res
+                    extra_res = res
         # a single escape was found
         elif self.in_escape == 1:
             # 7 bit CSI
             if b == ord("["):
                 self.in_escape = 2
                 self.seq_parser = SeqParser(False)
+                need_flush = True
             else:
                 # no CSI - emit ESC and data
                 self.in_escape = 0
-                result = [ControlChar(0x1B)]
+                extra_res.append(ControlChar(0x1B))
                 res = self._add_byte(b)
                 if res:
-                    result += res
-                return result
+                    extra_res = res
         # in escape sequence
         else:
             # add byte to esc sequence
@@ -269,6 +304,20 @@ class ConsoleStream:
                 self.in_escape = 0
                 self.seq_parser = None
                 return res
+
+        # need text flush?
+        res = []
+        if need_flush:
+            res_flush = self._flush_text()
+            if res_flush:
+                res = res_flush
+
+        # append extras
+        res += extra_res
+
+        # something to return or none
+        if len(res) > 0:
+            return res
 
     def flush(self):
         # abort a pending esc/csi sequence

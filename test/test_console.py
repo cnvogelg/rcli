@@ -7,6 +7,7 @@ def test_ctlseq_no_param():
     cs = ControlSeq("v")
     assert cs.to_bytes(csi=True) == b"\x9bv"
     assert cs.to_bytes(csi=False) == b"\x1b[v"
+    assert cs.get_key() == "v"
 
 
 def test_ctlseq_param():
@@ -15,6 +16,8 @@ def test_ctlseq_param():
     assert cs.to_bytes(csi=False) == b"\x1b[1v"
     assert cs.get_param(0) == 1
     assert cs.get_param(1) == 0  # out of bounds
+    assert cs.get_key() == "v"
+    assert cs.get_special("<", 17) == 17
 
 
 def test_ctlseq_param_two():
@@ -23,6 +26,7 @@ def test_ctlseq_param_two():
     assert cs.to_bytes(csi=False) == b"\x1b[1;42v"
     assert cs.get_param(0) == 1
     assert cs.get_param(1) == 42
+    assert cs.get_key() == "v"
 
 
 def test_ctlseq_param_skip():
@@ -31,6 +35,14 @@ def test_ctlseq_param_skip():
     assert cs.to_bytes(csi=False) == b"\x1b[;42v"
     assert cs.get_param(0, 12) == 12
     assert cs.get_param(1) == 42
+
+
+def test_ctlseq_param_special():
+    cs = ControlSeq("v", special={">": 17})
+    assert cs.to_bytes(csi=True) == b"\x9b>17v"
+    assert cs.to_bytes(csi=False) == b"\x1b[>17v"
+    assert cs.get_key() == "v"
+    assert cs.get_special(">", 42) == 17
 
 
 # ----- seqparser -----
@@ -141,25 +153,32 @@ def test_constream_control_char():
 def test_constream_esc_no_seq():
     s = ConsoleStream()
     # if its no seq begin then return raw seq
-    s.feed_bytes(b"\x1ba") == [ControlChar(0x1B), Text("a")]
+    assert s.feed_bytes(b"\x1ba") == [ControlChar(0x1B)]
+    assert s.flush() == [Text("a")]
 
 
 def test_constream_esc_seq():
     s = ConsoleStream()
-    s.feed_bytes(b"\x1b[a") == [ControlSeq("a")]
+    assert s.feed_bytes(b"\x1b[a") == [ControlSeq("a")]
 
 
 def test_constream_esc_invalid():
     s = ConsoleStream()
-    s.feed_bytes(b"\x1b[1;?") == [ControlChar(0x9B), Text("1;?")]
+    assert s.feed_bytes(b"\x1b[1;?") == [ControlChar(0x1B), Text("[1;?")]
 
 
 def test_constream_csi_seq():
     s = ConsoleStream()
-    s.feed_bytes(b"\x9ba") == [ControlSeq("a")]
+    assert s.feed_bytes(b"\x9b>4a") == [ControlSeq("a", special={">": 4})]
 
 
 def test_constream_csi_seq_invalid():
     s = ConsoleStream()
     # invalid seq will be reported as ctrlchar and text
-    s.feed_bytes(b"\x9b1;?") == [ControlChar(0x9B), Text("1;?")]
+    assert s.feed_bytes(b"\x9b1;?") == [ControlChar(0x9B), Text("1;?")]
+
+
+def test_constream_text_seq():
+    s = ConsoleStream()
+    assert s.feed_bytes(b"hello") is None
+    assert s.feed_bytes(b"\x9bH") == [Text("hello"), ControlSeq("H")]
