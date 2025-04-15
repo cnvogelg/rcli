@@ -8,6 +8,10 @@
 
 #include <dos/dostags.h>
 
+#ifdef DEBUG_SHELL
+#define DEBUG
+#endif
+
 #include "compiler.h"
 #include "shell.h"
 

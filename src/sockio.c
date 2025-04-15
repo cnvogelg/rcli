@@ -7,6 +7,10 @@
 #include <sys/ioctl.h>
 #include <netinet/tcp.h>
 
+#ifdef DEBUG_SOCKIO
+#define DEBUG
+#endif
+
 #include "log.h"
 #include "sockio.h"
 #include "listutil.h"

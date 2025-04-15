@@ -10,6 +10,10 @@
 
 #define ZERO 0
 
+#ifdef DEBUG_VCON
+#define DEBUG
+#endif
+
 #include "vcon.h"
 #include "log.h"
 #include "listutil.h"
