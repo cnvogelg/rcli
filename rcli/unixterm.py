@@ -2,7 +2,7 @@ import sys
 import os
 import curses
 
-from rcli.amicon import AmiConsoleBackend
+from amicon import AmiConsoleBackend
 
 
 class UnixTerm:
@@ -30,6 +30,9 @@ class UnixTerm:
 class UnixConsoleBackend(AmiConsoleBackend):
     def __init__(self, term: UnixTerm):
         self.term = term
+
+    def handle_event(self, ev):
+        print("EVENT:", ev)
 
     def write_text(self, txt):
         os.write(self.term.get_fd(), txt)

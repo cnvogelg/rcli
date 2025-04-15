@@ -9,7 +9,6 @@
 #include <dos/dostags.h>
 
 #define ZERO 0
-//#define LOG_ENABLED
 
 #include "vcon.h"
 #include "log.h"
@@ -102,13 +101,17 @@ fail:
   return NULL;
 }
 
-void vcon_cleanup(vcon_handle_t *sh)
+void vcon_flush(vcon_handle_t *sh)
 {
+  if(sh->state == VCON_STATE_FLUSH) {
+    return;
+  }
+
   for(ULONG i=0;i<sh->max_msgs;i++) {
     vcon_msg_t *vmsg = &sh->vmsgs[i];
     if(vmsg->type != VCON_MSG_FREE) {
       struct DosPacket *pkt = (struct DosPacket *)vmsg->private;
-      LOG(("vcon: cleanup vmsg: %lx type=%ld pkt=%lx\n", vmsg, (LONG)vmsg->type, pkt));
+      LOG(("vcon: flush vmsg: %lx type=%ld pkt=%lx\n", vmsg, (LONG)vmsg->type, pkt));
 
       LONG res1 = DOSFALSE;
       LONG res2 = ERROR_NO_FREE_STORE;
@@ -125,12 +128,14 @@ void vcon_cleanup(vcon_handle_t *sh)
         break;
       }
 
-      LOG(("vcon: reply: pkt=%lx res1=%ld res2=%ld\n", pkt, res1, res2));
+      LOG(("vcon: flush reply: pkt=%lx res1=%ld res2=%ld\n", pkt, res1, res2));
       ReplyPkt(pkt, res1, res2);
 
       vmsg->type = VCON_MSG_FREE;
     }
   }
+
+  sh->state = VCON_STATE_FLUSH;
 }
 
 void vcon_exit(vcon_handle_t *sh)
@@ -138,8 +143,6 @@ void vcon_exit(vcon_handle_t *sh)
   if(sh == NULL) {
     return;
   }
-
-  vcon_cleanup(sh);
 
   if(sh->vmsg_port != NULL) {
     DeleteMsgPort(sh->vmsg_port);
@@ -251,10 +254,19 @@ static void handle_dos_pkt(vcon_handle_t *sh, struct Message *msg)
       break;
     case ACTION_END:
       sh->open_cnt--;
+      LOG(("vcon: CLOSE: fh=%lx count=%ld\n", fh, (ULONG)sh->open_cnt));
       if(sh->open_cnt == 0) {
         sh->state = VCON_STATE_CLOSE;
+        // post end msg
+        LOG(("vcon: post END\n"));
+        vmsg = alloc_vmsg(sh, VCON_MSG_END, NULL, 0, NULL);
+        if(vmsg != NULL) {
+          PutMsg(sh->user_port, (struct Message *)vmsg);
+        } else {
+          res1 = DOSFALSE;
+          res2 = ERROR_NO_FREE_STORE;
+        }
       }
-      LOG(("vcon: CLOSE: fh=%lx count=%ld\n", fh, (ULONG)sh->open_cnt));
       break;
     case ACTION_CHANGE_SIGNAL: {
       struct MsgPort *msg_port = (struct MsgPort *)pkt->dp_Arg2;
@@ -307,15 +319,20 @@ static void handle_dos_pkt(vcon_handle_t *sh, struct Message *msg)
       APTR buf = (APTR)pkt->dp_Arg2;
       LONG size = pkt->dp_Arg3;
       LOG(("vcon: WRITE: pkt=%lx fh=%lx buf=%lx size=%ld\n", pkt, fh, buf, size));
-      /* send write vmsg */
-      vmsg = alloc_vmsg(sh, VCON_MSG_WRITE, buf, size, pkt);
-      if(vmsg != NULL) {
-        PutMsg(sh->user_port, (struct Message *)vmsg);
-        do_reply = FALSE;
+      if(sh->state == VCON_STATE_FLUSH) {
+        LOG(("vcon: WRITE flush\n"));
+        res1 = size;
       } else {
-        res1 = DOSFALSE;
-        res2 = ERROR_NO_FREE_STORE;
-        sh->state = VCON_STATE_ERROR;
+        /* send write vmsg */
+        vmsg = alloc_vmsg(sh, VCON_MSG_WRITE, buf, size, pkt);
+        if(vmsg != NULL) {
+          PutMsg(sh->user_port, (struct Message *)vmsg);
+          do_reply = FALSE;
+        } else {
+          res1 = DOSFALSE;
+          res2 = ERROR_NO_FREE_STORE;
+          sh->state = VCON_STATE_ERROR;
+        }
       }
       break;
     }
@@ -323,18 +340,23 @@ static void handle_dos_pkt(vcon_handle_t *sh, struct Message *msg)
       APTR buf = (APTR)pkt->dp_Arg2;
       LONG size = pkt->dp_Arg3;
       LOG(("vcon: READ: pkt=%lx fh=%lx buf=%lx size=%ld\n", pkt, fh, buf, size));
-      /* send read vmsg */
-      vmsg = alloc_vmsg(sh, VCON_MSG_READ, buf, size, pkt);
-      if(vmsg != NULL) {
-        PutMsg(sh->user_port, (struct Message *)vmsg);
-        do_reply = FALSE;
+      if(sh->state == VCON_STATE_FLUSH) {
+        LOG(("vcon: READ flush\n"));
+        res1 = 0; // EOF
       } else {
-        res1 = DOSFALSE;
-        res2 = ERROR_NO_FREE_STORE;
-        sh->state = VCON_STATE_ERROR;
+        /* send read vmsg */
+        vmsg = alloc_vmsg(sh, VCON_MSG_READ, buf, size, pkt);
+        if(vmsg != NULL) {
+          PutMsg(sh->user_port, (struct Message *)vmsg);
+          do_reply = FALSE;
+        } else {
+          res1 = DOSFALSE;
+          res2 = ERROR_NO_FREE_STORE;
+          sh->state = VCON_STATE_ERROR;
+        }
+        /* implicitly set signal port to reader */
+        sh->signal_port = pkt->dp_Port;
       }
-      /* implicitly set signal port to reader */
-      sh->signal_port = pkt->dp_Port;
       break;
     }
     case ACTION_SEEK: {
@@ -348,18 +370,25 @@ static void handle_dos_pkt(vcon_handle_t *sh, struct Message *msg)
     case ACTION_WAIT_CHAR: {
       ULONG time_us = pkt->dp_Arg1;
       LOG(("vcon: WAIT_CHAR: pkt=%lx time us=%lu\n", pkt, time_us));
-      /* send wait char vmsg */
-      vmsg = alloc_vmsg(sh, VCON_MSG_WAIT_CHAR, NULL, 0, pkt);
-      if(vmsg != NULL) {
-        /* store timeout in buffer.size */
-        vmsg->buffer.size = time_us;
-        /* send msg */
-        PutMsg(sh->user_port, (struct Message *)vmsg);
-        do_reply = FALSE;
-      } else {
+      if(sh->state == VCON_STATE_FLUSH) {
+        LOG(("vcon: WAIT flush\n"));
+        /* no char received */
         res1 = DOSFALSE;
-        res2 = ERROR_NO_FREE_STORE;
-        sh->state = VCON_STATE_ERROR;
+        res2 = 0;
+      } else {
+        /* send wait char vmsg */
+        vmsg = alloc_vmsg(sh, VCON_MSG_WAIT_CHAR, NULL, 0, pkt);
+        if(vmsg != NULL) {
+          /* store timeout in buffer.size */
+          vmsg->buffer.size = time_us;
+          /* send msg */
+          PutMsg(sh->user_port, (struct Message *)vmsg);
+          do_reply = FALSE;
+        } else {
+          res1 = DOSFALSE;
+          res2 = ERROR_NO_FREE_STORE;
+          sh->state = VCON_STATE_ERROR;
+        }
       }
       break;
     }
@@ -410,7 +439,7 @@ static void handle_vmsg_reply(vcon_handle_t *sh, struct Message *msg)
   free_vmsg(sh, vmsg);
 }
 
-ULONG vcon_handle_sigmask(vcon_handle_t *sh, ULONG got_mask)
+BOOL vcon_handle_sigmask(vcon_handle_t *sh, ULONG got_mask)
 {
   ULONG flags = 0;
 
@@ -430,5 +459,5 @@ ULONG vcon_handle_sigmask(vcon_handle_t *sh, ULONG got_mask)
     }
   }
 
-  return sh->state;
+  return sh->state != VCON_STATE_ERROR;
 }

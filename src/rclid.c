@@ -9,8 +9,6 @@
 #include <string.h>
 #include <sys/ioctl.h>
 
-#define LOG_ENABLED
-
 #include "log.h"
 #include "serv.h"
 #include "vcon.h"
@@ -123,7 +121,8 @@ static void exit_rclid(serv_data_t *sd)
   }
 
   if(sd->shell != NULL) {
-    shell_exit(sd->shell);
+    BYTE result = shell_exit(sd->shell);
+    LOG(("rclid: shell result %ld\n", (LONG)result));
   }
 
   if(sd->vcon != NULL) {
@@ -143,7 +142,7 @@ static void exit_rclid(serv_data_t *sd)
 static int handle_vcon_msg(serv_data_t *sd, vcon_msg_t *vmsg)
 {
   buf_t *buffer = &vmsg->buffer;
-  LOG(("rclid: got vcon msg: type=%ld pkt=%lx data=%lx size=%ld\n",
+  LOG(("rclid: handle vcon msg: type=%ld pkt=%lx data=%lx size=%ld\n",
     (LONG)vmsg->type, vmsg->private, buffer->data, buffer->size));
   int result = HANDLE_OK;
   BOOL reply = TRUE;
@@ -215,6 +214,11 @@ static int handle_vcon_msg(serv_data_t *sd, vcon_msg_t *vmsg)
     break;
   }
 
+  case VCON_MSG_END:
+    LOG(("rclid: got vcon end msg\n"));
+    result = HANDLE_END;
+    break;
+
   default:
     LOG(("rclid: UNKNOWN vcon msg: %ld\n", (ULONG)vmsg->type));
     break;
@@ -230,9 +234,10 @@ static int handle_vcon_msg(serv_data_t *sd, vcon_msg_t *vmsg)
 
 static int handle_sockio_msg(serv_data_t *sd, sockio_msg_t *msg)
 {
-  LOG(("rclid: got sockio msg: type=%ld\n", (LONG)msg->type));
+  LOG(("rclid: handle sockio msg: type=%ld\n", (LONG)msg->type));
   buf_t *buffer = &msg->buffer;
   vcon_msg_t *vmsg = (vcon_msg_t *)msg->user_data;
+  int result = HANDLE_OK;
 
   switch(msg->type) {
   case SOCKIO_MSG_RECV:
@@ -249,9 +254,17 @@ static int handle_sockio_msg(serv_data_t *sd, sockio_msg_t *msg)
     vmsg->buffer.size = got_char;
     break;
   }
+  case SOCKIO_MSG_END:
+    LOG(("rclid: sockio ended.\n"));
+    result = HANDLE_END;
+    break;
+  case SOCKIO_MSG_ERROR:
+    LOG(("rclid: sockio ERROR!\n"));
+    result = HANDLE_ERROR;
+    break;
   default:
-    LOG(("rclid: unknown sockio msg!\n"));
-    return HANDLE_ERROR;
+    LOG(("rclid: unknown sockio msg: %ld\n", msg->type));
+    break;
   }
 
   // finish sockio msg
@@ -263,53 +276,45 @@ static int handle_sockio_msg(serv_data_t *sd, sockio_msg_t *msg)
     ReplyMsg((struct Message *)vmsg);
   }
 
-  return HANDLE_OK;
+  LOG(("rclid: done sockio msg. result=%ld\n", result));
+  return result;
 }
 
-static BOOL main_loop(serv_data_t *sd)
+static void main_loop(serv_data_t *sd)
 {
   ULONG shell_mask = shell_exit_mask(sd->shell);
   ULONG vcon_mask = vcon_get_sigmask(sd->vcon);
   ULONG vport_mask = sd->vcon_port_mask;
   ULONG sport_mask = sd->sockio_port_mask;
   ULONG masks = shell_mask | vcon_mask | vport_mask | sport_mask | SIGBREAKF_CTRL_C;
+  BOOL socket_active = TRUE;
+  BOOL vcon_active = TRUE;
 
-  while(1) {
+  LOG(("rclid: enter main\n"));
+  while(socket_active || vcon_active) {
 
     // wait/select/handle sockio
     ULONG sig_mask = masks;
-    LOG(("rclid: wait begin: sig_mask=%lx\n", sig_mask));
-    ULONG state = sockio_wait_handle(sd->sockio, &sig_mask);
-    LOG(("rclid: wait return: state=%lx sig_mask=%lx\n", state, sig_mask));
-
-    // sockio failed
-    if(state == SOCKIO_STATE_ERROR) {
-      error_out(sd->socket, "ERROR: sockio!\n");
-      break;
-    }
-    // sockio detected EOF
-    else if(state == SOCKIO_STATE_EOF) {
-      LOG(("rclid: EOF (sockio)\n"));
-      return FALSE;
-    }
+    LOG(("rclid: wait socket begin: sig_mask=%lx\n", sig_mask));
+    sockio_wait_handle(sd->sockio, &sig_mask);
+    LOG(("rclid: wait socket return: got sig_mask=%lx\n", sig_mask));
 
     // break in server console window
     if(sig_mask & SIGBREAKF_CTRL_C) {
       PutStr("*BREAK!\n");
-      return FALSE;
+      // trigger clean up at socket
+      sockio_end(sd->sockio);
+      vcon_flush(sd->vcon);
     }
 
     // do vcon
     if(vcon_mask & sig_mask) {
       LOG(("rclid: vcon mask\n"));
-      ULONG state = vcon_handle_sigmask(sd->vcon, sig_mask);
-      if(state == VCON_STATE_ERROR) {
-        error_out(sd->socket, "ERROR: vcon!\n");
-        break;
-      }
-      else if(state == VCON_STATE_CLOSE) {
-        LOG(("rclid: CLOSE (vcon)\n"));
-        break;
+      BOOL ok = vcon_handle_sigmask(sd->vcon, sig_mask);
+      if(!ok) {
+        // error means vcon had some trouble allocating memory
+        error_out(sd->socket, "Error: out of memory!\n");
+        sockio_end(sd->sockio);
       }
     }
 
@@ -319,9 +324,21 @@ static BOOL main_loop(serv_data_t *sd)
       struct Message *msg;
       while((msg = GetMsg(sd->vcon_port)) != NULL) {
         int result = handle_vcon_msg(sd, (vcon_msg_t *)msg);
+        // error means submitting to sockio had a problem
+        // vcon message will be replied without any processing
+        // and will lead to vcon closing.
         if(result == HANDLE_ERROR) {
-          error_out(sd->socket, "ERROR: vcon handle!\n");
-          break;
+          LOG(("rclid: vcon reports sockio error\n"));
+        }
+        // vcon is reported done
+        else if(result == HANDLE_END) {
+          LOG(("rclid: vcon is done.\n"));
+          vcon_active = FALSE;
+          // shut down socket
+          if(socket_active) {
+            LOG(("rclid: shutdown sockio\n"));
+            sockio_end(sd->sockio);
+          }
         }
       }
     }
@@ -333,14 +350,17 @@ static BOOL main_loop(serv_data_t *sd)
       while((msg = GetMsg(sd->sockio_port)) != NULL) {
         int result = handle_sockio_msg(sd, (sockio_msg_t *)msg);
         if(result == HANDLE_ERROR) {
-          error_out(sd->socket, "ERROR: sockio handle!\n");
-          break;
+          LOG(("rclid: sockio ended with ERROR!\n"));
+          socket_active = FALSE;
+        }
+        else if(result == HANDLE_END) {
+          LOG(("rclid: sockio ended."));
+          socket_active = FALSE;
         }
       }
     }
   }
-
-  return TRUE;
+  LOG(("rclid: leave main\n"));
 }
 
 int main(void)
@@ -352,11 +372,7 @@ int main(void)
 
   serv_data_t *sd = init_rclid(socket, 8192, 8);
   if(sd != NULL) {
-    BOOL ok = main_loop(sd);
-    if(!ok) {
-      LOG(("clean up vcon!\n"));
-      vcon_cleanup(sd->vcon);
-    }
+    main_loop(sd);
   }
   exit_rclid(sd);
 

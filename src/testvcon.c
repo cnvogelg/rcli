@@ -16,10 +16,11 @@
 extern struct ExecBase *SysBase;
 struct DosLibrary *DOSBase;
 
-static void handle_vmsg(vcon_msg_t *vmsg)
+static BOOL handle_vmsg(vcon_msg_t *vmsg)
 {
   Printf("test: got VMSG: type=%ld pkt=%lx\n", (LONG)vmsg->type, vmsg->private);
   buf_t *buffer = &vmsg->buffer;
+  BOOL stay = TRUE;
 
   switch(vmsg->type) {
   case VCON_MSG_WRITE:
@@ -53,10 +54,18 @@ static void handle_vmsg(vcon_msg_t *vmsg)
     }
     break;
     }
+
+  case VCON_MSG_END: {
+    PutStr("test: VCON end!\n");
+    stay = FALSE;
+    break;
+  }
   }
 
   PutStr("test: reply VMSG\n");
   ReplyMsg((struct Message *)vmsg);
+
+  return stay;
 }
 
 int testvcon(void)
@@ -105,54 +114,56 @@ int testvcon(void)
     // handle vcon
     if(got_mask & con_mask) {
       PutStr("test: handle VCON\n");
-      ULONG state = vcon_handle_sigmask(sc, got_mask & con_mask);
-      Printf("test: -> state=%lx\n", state);
-      if(state == VCON_STATE_CLOSE) {
-        PutStr("test: VCON CLOSE!\n");
+      BOOL ok = vcon_handle_sigmask(sc, got_mask & con_mask);
+      if(ok) {
+        PutStr("test: VCON ok\n");
       }
-      else if(state == VCON_STATE_ERROR) {
+      else {
         PutStr("test: VCON ERROR!!\n");
-        break;
       }
     }
 
     // handle incoming vcon_msg_t from vcon
+    BOOL stay = TRUE;
     if(got_mask & vmsg_mask) {
       struct Message *msg;
       while((msg = GetMsg(vmsg_port)) != NULL) {
-        handle_vmsg((vcon_msg_t *)msg);
+        BOOL my_stay = handle_vmsg((vcon_msg_t *)msg);
+        stay = stay && my_stay;
       }
     }
 
     // shell reports end
     if(got_mask & shell_mask) {
       PutStr("test: shell signal!\n");
-      break;
     }
 
     // handle ctrl signals
     if(got_mask & SIGBREAKF_CTRL_C) {
       if(ctrl_c_count == 0) {
-        PutStr("test: Ctrl-C signal");
+        PutStr("test: ----> Ctrl-C signal\n");
         vcon_send_signal(sc, SIGBREAKF_CTRL_C);
-        ctrl_c_count++;
+      } else {
+        PutStr("test: ----> flush vcon\n");
+        vcon_flush(sc);
       }
-      else {
-        PutStr("test: *BREAK!\n");
-        break;
-      }
+      ctrl_c_count++;
     }
     if(got_mask & SIGBREAKF_CTRL_D) {
-      PutStr("test: Ctrl-D signal");
+      PutStr("test: Ctrl-D signal\n");
       vcon_send_signal(sc, SIGBREAKF_CTRL_D);
     }
     if(got_mask & SIGBREAKF_CTRL_E) {
-      PutStr("test: Ctrl-E signal");
+      PutStr("test: Ctrl-E signal\n");
       vcon_send_signal(sc, SIGBREAKF_CTRL_E);
     }
     if(got_mask & SIGBREAKF_CTRL_F) {
-      PutStr("test: Ctrl-F signal");
+      PutStr("test: Ctrl-F signal\n");
       vcon_send_signal(sc, SIGBREAKF_CTRL_F);
+    }
+
+    if(!stay) {
+      break;
     }
   }
 
@@ -160,10 +171,11 @@ int testvcon(void)
   LONG rc = shell_exit(sh);
   Printf("test: done rc=%ld\n", rc);
 
+  PutStr("test: vcon exit\n");
   vcon_exit(sc);
   DeleteMsgPort(vmsg_port);
-  PutStr("test: all done.\n");
 
+  PutStr("test: all done\n");
   return RETURN_OK;
 }
 

@@ -1,7 +1,7 @@
 #ifndef LOG_H
 #define LOG_H
 
-#ifdef LOG_ENABLED
+#ifdef DEBUG
 
 #include <proto/dos.h>
 

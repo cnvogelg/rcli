@@ -9,7 +9,7 @@ import os
 import pprint
 
 from rcli.unixterm import UnixTerm, UnixConsoleBackend
-from rcli.amicon import AmiConsole
+from amicon import AmiConsole
 
 LOGGING_FORMAT = "%(message)s"
 DESC = "remote Amiga CLI shell"

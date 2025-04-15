@@ -22,6 +22,8 @@ AMIGA_DIR?=$(HOME)/projects/amidev
 NETINC=$(AMIGA_DIR)/roadshow
 export AMIGA_DIR
 
+include $(SCRIPT_DIR)/ndk.mk
+
 # include compiler setup
 ifeq "$(COMPILER)" "vbcc"
 include $(SCRIPT_DIR)/vbcc.mk
@@ -41,7 +43,7 @@ H := @
 endif
 
 # where to put test files
-TEST_DIR ?= $(HOME)/amiga/shared/rcli
+TEST_DIR ?= $(HOME)/cvproj/amiga/shared/rcli
 
 # macros
 

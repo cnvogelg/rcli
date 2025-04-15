@@ -3,16 +3,6 @@ CC=m68k-amigaos-gcc -c
 LD=m68k-amigaos-gcc
 AS=vasmm68k_mot
 
-# NDK includes/libs
-NDK_DIR ?= $(AMIGA_DIR)/ndk3.2r4
-NDK_INC = $(NDK_DIR)/include_h
-NDK_LIB = $(NDK_DIR)/lib
-NDK_INC_ASM = $(NDK_DIR)/include_i
-
-# netinclude
-NET_INC ?= $(AMIGA_DIR)/roadshow/netinclude
-DEV_INC ?= $(AMIGA_DIR)/roadshow/include
-
 #BASEREL = -fbaserel -DBASEREL
 
 CFLAGS = -Wall -Werror -noixemul -mcrt=clib2

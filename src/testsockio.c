@@ -21,10 +21,17 @@ static BOOL handle_msg(sockio_handle_t *sio, sockio_msg_t *msg)
 
   switch(msg->type) {
   case SOCKIO_MSG_RECV:
+    // is EOF?
+    if(msg->buffer.size == 0) {
+      PutStr("test: recv EOF!\n");
+      break;
+    }
+
     // if msg starts with 'q' then end
     if(msg->buffer.data[0] == 'q') {
       Printf("test: QUITTING...\n");
-      stay = FALSE;
+      sockio_end(sio);
+      break;
     }
 
     // if msg starts with 'w' then start wait
@@ -36,6 +43,7 @@ static BOOL handle_msg(sockio_handle_t *sio, sockio_msg_t *msg)
         } else {
           Printf("test: waiting for 5s...\n");
         }
+        break;
       }
     }
     // reply received msg
@@ -62,6 +70,16 @@ static BOOL handle_msg(sockio_handle_t *sio, sockio_msg_t *msg)
     wait_msg = NULL;
     break;
   }
+  case SOCKIO_MSG_END: {
+    PutStr("test: END msg!\n");
+    stay = FALSE;
+    break;
+  }
+  case SOCKIO_MSG_ERROR: {
+    Printf("test: ERROR msg: %ld!\n", msg->min_size);
+    stay = FALSE;
+    break;
+  }
   }
 
   sockio_free_msg(sio, msg);
@@ -79,23 +97,23 @@ static int main_loop(sockio_handle_t *sio, struct MsgPort *msg_port)
 
   ULONG port_mask = 1 << msg_port->mp_SigBit;
 
+  sockio_send(sio, "hello!\n", 7);
+
   while(1) {
-    ULONG sig_mask = SIGBREAKF_CTRL_C | port_mask;
-    ULONG state = sockio_wait_handle(sio, &sig_mask);
-    Printf("test: wait state=%lx sig mask=%lx\n", state, sig_mask);
-    if(state == SOCKIO_STATE_ERROR) {
-      PutStr("test: ERROR!\n");
-      break;
+    ULONG sig_mask = SIGBREAKF_CTRL_C | SIGBREAKF_CTRL_D | port_mask;
+
+    sockio_wait_handle(sio, &sig_mask);
+    Printf("test: wait sig mask=%lx\n", sig_mask);
+
+    if(sig_mask & SIGBREAKF_CTRL_D) {
+      PutStr("test: End\n");
+      sockio_end(sio);
     }
-    else if(state == SOCKIO_STATE_EOF) {
-      PutStr("test: EOF!\n");
+    if(sig_mask & SIGBREAKF_CTRL_C) {
+      PutStr("test: Break!\n");
       break;
     }
 
-    if(sig_mask & SIGBREAKF_CTRL_C) {
-      PutStr("test: *Break\n");
-      break;
-    }
     if(sig_mask & port_mask) {
       struct Message *msg;
       BOOL stay = TRUE;

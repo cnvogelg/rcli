@@ -3,6 +3,9 @@
 opt:
 	@$(MAKE) BUILD_TYPE=RELEASE
 
+gcc:
+	@$(MAKE) COMPILER=gcc
+
 compiler:
 	$(H)$(MAKE) COMPILER=sc
 	$(H)$(MAKE) COMPILER=vbcc

@@ -132,6 +132,12 @@ ULONG shell_exit_mask(shell_handle_t *sh)
 
 BYTE shell_exit(shell_handle_t *sh)
 {
+  // blocking wait for end of shell
+  if(sh->exit_status == SHELL_EXIT_STATUS_INVALID) {
+    ULONG mask = shell_exit_mask(sh);
+    Wait(mask);
+  }
+
   BYTE result = sh->exit_status;
 
   FreeSignal(sh->exit_signal);

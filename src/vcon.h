@@ -7,10 +7,13 @@
 #define VCON_MSG_WRITE          1
 #define VCON_MSG_WAIT_CHAR      2
 #define VCON_MSG_BUFFER_MODE    3
+#define VCON_MSG_END            4
+#define VCON_MSG_ERROR          5
 
 #define VCON_STATE_OPEN    0
 #define VCON_STATE_CLOSE   1
 #define VCON_STATE_ERROR   2
+#define VCON_STATE_FLUSH   3
 
 struct vcon_msg
 {
@@ -45,6 +48,9 @@ ULONG vcon_get_sigmask(vcon_handle_t *sh);
 BOOL vcon_send_signal(vcon_handle_t *sh, ULONG sig_mask);
 
 /* process the signals the vcon handles. return VCON_STATE_* */
-ULONG vcon_handle_sigmask(vcon_handle_t *sh, ULONG sig_mask);
+BOOL vcon_handle_sigmask(vcon_handle_t *sh, ULONG sig_mask);
+
+/* flush all pending con requests and EOF reads() */
+void vcon_flush(vcon_handle_t *sh);
 
 #endif
