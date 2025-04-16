@@ -137,6 +137,56 @@ static void exit_rclid(serv_data_t *sd)
 #define HANDLE_ERROR  1
 #define HANDLE_END    2
 
+static int handle_buffer_mode(serv_data_t *sd, vcon_msg_t *vmsg, BOOL *reply)
+{
+  UBYTE mode = vmsg->buffer_mode;
+
+  *reply = TRUE;
+
+  // verify mdoes
+  switch(mode) {
+  case VCON_MODE_COOKED:
+  case VCON_MODE_RAW:
+    break;
+  case VCON_MODE_MEDIUM:
+    if(sd->flags & FLAG_MEDIUM) {
+      break;
+    } else {
+      // set to unsupported
+      vmsg->buffer_mode = VCON_MODE_UNSUPPORTED;
+      LOG(("rclid: ignore MEDIUM mode!\n"));
+      break;
+    }
+  default:
+    vmsg->buffer_mode = VCON_MODE_UNSUPPORTED;
+    LOG(("rclid: invalid mode %ld\n", (LONG)mode));
+    break;
+  }
+
+  // in passive mode reply mode request directly
+  if(sd->flags & FLAG_PASSIVE) {
+    LOG(("rclid: slurp mode %ld\n", (LONG)mode));
+  } else {
+    // prepare our own CSI to report the buffer mode
+    UBYTE *buf = sd->csi_buf;
+    buf[0] = 0x9b; // CSI
+    buf[1] = vmsg->buffer_mode + '0';
+    buf[2] = 'V';
+    sockio_msg_t *msg = sockio_send(sd->sockio, buf, 3);
+    if(msg == NULL) {
+      error_out(sd->socket, "Error in sockio_send buffer mode!\n");
+      return HANDLE_ERROR;
+    } else {
+      LOG(("rclid: forward mode %ld command\n", (LONG)mode));
+      // remember associated vmsg (to reply later)
+      msg->user_data = vmsg;
+      *reply = FALSE;
+    }
+  }
+
+  return HANDLE_OK;
+}
+
 static int handle_vcon_msg(serv_data_t *sd, vcon_msg_t *vmsg, BOOL socket_active)
 {
   buf_t *buffer = &vmsg->buffer;
@@ -187,21 +237,7 @@ static int handle_vcon_msg(serv_data_t *sd, vcon_msg_t *vmsg, BOOL socket_active
   case VCON_MSG_BUFFER_MODE: {
     LOG(("rclid: BUFFER MODE=%ld\n", (LONG)vmsg->buffer_mode));
     if(socket_active) {
-      // prepare our own CSI to report the buffer mode
-      UBYTE *buf = sd->csi_buf;
-      buf[0] = 0x9b; // CSI
-      buf[1] = (UBYTE)vmsg->buffer_mode + '0';
-      buf[2] = 'V';
-      sockio_msg_t *msg = sockio_send(sd->sockio, buf, 3);
-      if(msg == NULL) {
-        error_out(sd->socket, "Error in sockio_send buffer mode!\n");
-        result = HANDLE_ERROR;
-      } else {
-        LOG(("rclid: got vcon write msg=%lx -> sockio: msg=%lx\n", vmsg, msg));
-        // remember associated vmsg (to reply later)
-        msg->user_data = vmsg;
-        reply = FALSE;
-      }
+      result = handle_buffer_mode(sd, vmsg, &reply);
     } else {
       LOG(("rclid: slurp vcon buffer mode!\n"));
     }
@@ -377,7 +413,7 @@ int main(void)
     return RETURN_FAIL;
   }
 
-  serv_data_t *sd = init_rclid(socket, 8192, 8, 900000UL);
+  serv_data_t *sd = init_rclid(socket, 8192, 8, 200000UL);
   if(sd != NULL) {
     if(init_loop(sd)) {
       if(start_shell(sd)) {

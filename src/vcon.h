@@ -15,6 +15,11 @@
 #define VCON_STATE_ERROR   2
 #define VCON_STATE_FLUSH   3
 
+#define VCON_MODE_UNSUPPORTED   0xff
+#define VCON_MODE_COOKED        0
+#define VCON_MODE_RAW           1
+#define VCON_MODE_MEDIUM        2
+
 struct vcon_msg
 {
   struct Message msg;

@@ -25,6 +25,7 @@ struct serv_data {
 typedef struct serv_data serv_data_t;
 
 #define FLAG_PASSIVE  1
+#define FLAG_MEDIUM   2
 
 extern void error_out(int socket, const char *msg);
 

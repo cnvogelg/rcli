@@ -284,6 +284,10 @@ static void handle_dos_pkt(vcon_handle_t *sh, struct Message *msg)
     case ACTION_SCREEN_MODE: {
       LONG mode = pkt->dp_Arg1;
       LOG(("vcon: SCREEN_MODE: mode=%ld\n", mode));
+      // map alternative raw mode
+      if(mode == -1) {
+        mode = 1;
+      }
       sh->buffer_mode = mode;
       /* send mode vmsg */
       vmsg = alloc_vmsg(sh, VCON_MSG_BUFFER_MODE, NULL, 0, pkt);
