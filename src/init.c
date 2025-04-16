@@ -24,8 +24,8 @@
 #define INIT_STATE_RECV   1
 #define INIT_STATE_SEND   2
 
-#define HANDSHAKE_LEN     6
-#define HANDSHAKE_STR     "RCLI1\n"
+#define HANDSHAKE_LEN     4
+#define HANDSHAKE_STR     "CLI0"
 
 BOOL init_loop(serv_data_t *sd)
 {
@@ -34,7 +34,7 @@ BOOL init_loop(serv_data_t *sd)
   BOOL ok = TRUE;
   BOOL stay = TRUE;
   sockio_msg_t *msg = NULL;
-  UBYTE seq[8];
+  UBYTE seq[HANDSHAKE_LEN];
 
   // start wait
   msg = sockio_wait_char(sd->sockio, sd->init_wait_us);
@@ -57,7 +57,7 @@ BOOL init_loop(serv_data_t *sd)
         case SOCKIO_MSG_WAIT_CHAR:
           // got char
           if(smsg->buffer.size == 1) {
-            // epxect init handshake "RCLIx\n"
+            // epxect init handshake "CLIx"
             seq[4] = 0;
             msg = sockio_recv(sd->sockio, seq, HANDSHAKE_LEN, HANDSHAKE_LEN);
             if(msg == NULL) {
@@ -75,11 +75,17 @@ BOOL init_loop(serv_data_t *sd)
           break;
         case SOCKIO_MSG_RECV:
           LOG(("rclid: init got handshake: %s\n", seq));
-          if(strncmp(seq, HANDSHAKE_STR, HANDSHAKE_LEN)!=0) {
+          if(strncmp(seq, HANDSHAKE_STR, HANDSHAKE_LEN - 1)!=0) {
             LOG(("rclid: wrong handshake -> passive!\n"));
             stay = FALSE;
             sd->flags |= FLAG_PASSIVE;
           } else {
+            // CLI1 = support medium mode
+            // CLI0 = no medium mode
+            UBYTE mode = seq[3];
+            if(mode == '1') {
+              sd->flags |= FLAG_MEDIUM;
+            }
             // answer
             msg = sockio_send(sd->sockio, seq, HANDSHAKE_LEN);
             if(msg == NULL) {

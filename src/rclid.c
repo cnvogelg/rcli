@@ -155,12 +155,12 @@ static int handle_buffer_mode(serv_data_t *sd, vcon_msg_t *vmsg, BOOL *reply)
       // set to unsupported
       vmsg->buffer_mode = VCON_MODE_UNSUPPORTED;
       LOG(("rclid: ignore MEDIUM mode!\n"));
-      break;
+      return HANDLE_OK;
     }
   default:
     vmsg->buffer_mode = VCON_MODE_UNSUPPORTED;
     LOG(("rclid: invalid mode %ld\n", (LONG)mode));
-    break;
+    return HANDLE_OK;
   }
 
   // in passive mode reply mode request directly

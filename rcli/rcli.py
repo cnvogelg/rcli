@@ -21,6 +21,7 @@ def rcli(host, port):
         s.connect((host, port))
     except OSError as e:
         print(f"Error connecting '{host}:{port}': {e}")
+        return 1
 
     term = UnixTerm()
     term_fd = term.get_fd()
@@ -28,6 +29,15 @@ def rcli(host, port):
     backend = UnixConsoleBackend(term)
     con = AmiConsole(backend)
 
+    # handshake
+    handshake = b"CLI1"
+    s.send(handshake)
+    res = s.recv(6)
+    if res != handshake:
+        print("Wrong handshake... no rclid?")
+        return 2
+
+    # main loop
     try:
         connected = True
         while connected:
