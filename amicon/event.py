@@ -12,6 +12,9 @@ class TextEvent(ConsoleEvent):
     def __eq__(self, other):
         return self.txt == other.txt
 
+    def raw(self):
+        return self.txt
+
 
 class CtlCharEvent(ConsoleEvent):
     def __init__(self, char):
@@ -22,6 +25,9 @@ class CtlCharEvent(ConsoleEvent):
 
     def __eq__(self, other):
         return self.char == other.char
+
+    def raw(self):
+        return bytes([self.char])
 
 
 class ParamEvent(ConsoleEvent):
@@ -36,6 +42,9 @@ class ParamEvent(ConsoleEvent):
 
     def __eq__(self, other):
         return self.key == other.key and self.val == other.val
+
+    def raw(self):
+        return None
 
 
 class CmdEvent(ConsoleEvent):
