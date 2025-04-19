@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rcli"
+authors = [
+    {name = "Christian Vogelgsang", email = "chris@vogelgsang.org"},
+]
+description = "A remote CLI client for the Amiga"
+requires-python = ">=3.9"
+keywords = ["AmigaOS", "CLI", "remote"]
+license = {text = "GPL-v3"}
+dynamic = ["version", "readme"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["python/"]
+include = ["rcli", "amicon"]
+
+[tool.setuptools.dynamic]
+readme = { file="README.md", content-type="text/markdown" }
+
+[tool.setuptools_scm]
+
+[project.scripts]
+rcli = "rcli.rcli:main"
