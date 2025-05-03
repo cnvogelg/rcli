@@ -1,48 +1,29 @@
-from amicon import AmiConsole, AmiConsoleBackend
 from amicon.const import AmiControlChars as cc
 from amicon.event import (
     TextEvent,
     CtlCharEvent,
     ParamEvent,
     CmdEvent,
-    ResizeEvent,
     CharAttrEvent,
-    MoveCursorEvent,
+    ConsoleEventStream,
 )
 
 
-class MyBackend(AmiConsoleBackend):
-    def __init__(self):
-        self.events = []
-
-    def handle_event(self, ev):
-        self.events.append(ev)
-
-
-def test_amicon_console_setup():
-    be = MyBackend()
-    con = AmiConsole(be)
+def test_amicon_event_setup():
+    con = ConsoleEventStream()
 
 
 def check(feed, ev):
-    be = MyBackend()
-    con = AmiConsole(be)
-    con.feed_bytes(feed)
-    assert be.events == ev
+    con = ConsoleEventStream()
+    got_ev = con.feed_bytes(feed)
+    assert got_ev == ev
 
 
-def test_amicon_console_resize():
-    be = MyBackend()
-    con = AmiConsole(be)
-    con.resize(33, 42)
-    assert be.events == [ResizeEvent(33, 42)]
-
-
-def test_amicon_console_text():
+def test_amicon_event_text():
     check("hello, world!\n", [TextEvent(b"hello, world!"), CtlCharEvent(cc.LINEFEED)])
 
 
-def test_amicon_console_set_mode():
+def test_amicon_event_set_mode():
     check(
         "hi\x9b2Vwo\x9b0V\n",
         [
@@ -55,7 +36,7 @@ def test_amicon_console_set_mode():
     )
 
 
-def test_amicon_console_char_attr():
+def test_amicon_event_char_attr():
     check("\x9b8m", [CharAttrEvent(attr=8)])
     check("\x9b33m", [CharAttrEvent(fg=3)])
     check("\x9b44m", [CharAttrEvent(cg=4)])
@@ -63,7 +44,7 @@ def test_amicon_console_char_attr():
     check("\x9b8;33;44;>7m", [CharAttrEvent(attr=8, fg=3, cg=4, bg=7)])
 
 
-def test_amicon_console_ctl_chars():
+def test_amicon_event_ctl_chars():
     check("\x07", [CtlCharEvent(cc.BELL)])
     check("\x08", [CtlCharEvent(cc.BACKSPACE)])
     check("\x09", [CtlCharEvent(cc.H_TAB)])
@@ -73,7 +54,7 @@ def test_amicon_console_ctl_chars():
     check("\x0d", [CtlCharEvent(cc.RETURN)])
 
 
-def test_amicon_console_shift_in_out():
+def test_amicon_event_shift_in_out():
     check(
         "hello\x0eABC\x0fworld\n",
         [
@@ -85,8 +66,8 @@ def test_amicon_console_shift_in_out():
     )
 
 
-def test_amicon_console_ctl_chars():
-    check("\x84", [MoveCursorEvent(0, 1)])  # INDEX
-    check("\x8d", [MoveCursorEvent(0, -1)])  # REVERSE_INDEX
+def test_amicon_event_ctl_chars():
+    check("\x84", [CtlCharEvent(cc.INDEX)])  # INDEX
+    check("\x8d", [CtlCharEvent(cc.REV_INDEX)])  # REVERSE_INDEX
     check("\x85", [CtlCharEvent(cc.LINEFEED)])  # NEXT_LINE
     check("\x88", [CmdEvent(CmdEvent.H_TAB_SET)])  # HOR_TAB_SET

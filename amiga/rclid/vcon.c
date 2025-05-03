@@ -437,6 +437,16 @@ static void handle_vmsg_reply(vcon_handle_t *sh, struct Message *msg)
       res2 = vmsg->buffer.size;
     }
     break;
+  case VCON_MSG_BUFFER_MODE:
+    if(vmsg->buffer_mode == VCON_MODE_UNSUPPORTED) {
+      res1 = DOSFALSE;
+      res2 = ERROR_OBJECT_WRONG_TYPE;
+    } else {
+      res1 = DOSTRUE;
+      res2 = 0; /* no intuition window attached */
+    }
+  default:
+    break;
   }
 
   if(pkt != NULL) {

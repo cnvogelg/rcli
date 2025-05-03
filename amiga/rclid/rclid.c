@@ -154,7 +154,7 @@ static int handle_buffer_mode(serv_data_t *sd, vcon_msg_t *vmsg, BOOL *reply)
     } else {
       // set to unsupported
       vmsg->buffer_mode = VCON_MODE_UNSUPPORTED;
-      LOG(("rclid: ignore MEDIUM mode!\n"));
+      LOG(("rclid: reject MEDIUM mode!\n"));
       return HANDLE_OK;
     }
   default:
@@ -165,7 +165,7 @@ static int handle_buffer_mode(serv_data_t *sd, vcon_msg_t *vmsg, BOOL *reply)
 
   // in passive mode reply mode request directly
   if(sd->flags & FLAG_PASSIVE) {
-    LOG(("rclid: slurp mode %ld\n", (LONG)mode));
+    LOG(("rclid: passive: ignore mode %ld\n", (LONG)mode));
   } else {
     // prepare our own CSI to report the buffer mode
     UBYTE *buf = sd->csi_buf;

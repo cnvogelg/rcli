@@ -8,11 +8,18 @@ import select
 import os
 import pprint
 
-from rcli.unixterm import UnixTerm, UnixConsoleBackend
-from amicon import AmiConsole
+from amicon import Console, Writer, UnixTermScreen
 
 LOGGING_FORMAT = "%(message)s"
 DESC = "remote Amiga CLI shell"
+
+
+class SocketWriter(Writer):
+    def __init__(self, socket):
+        self.socket = socket
+
+    def write(self, buffer):
+        self.socket.send(buffer)
 
 
 def rcli(host, port):
@@ -23,12 +30,6 @@ def rcli(host, port):
         print(f"Error connecting '{host}:{port}': {e}")
         return 1
 
-    term = UnixTerm()
-    term_fd = term.get_fd()
-
-    backend = UnixConsoleBackend(term)
-    con = AmiConsole(backend)
-
     # handshake
     handshake = b"CLI1"
     s.send(handshake)
@@ -36,6 +37,12 @@ def rcli(host, port):
     if res != handshake:
         print("Wrong handshake... no rclid?")
         return 2
+
+    # setup console
+    screen = UnixTermScreen()
+    term_fd = screen.get_fd()
+    writer = SocketWriter(s)
+    con = Console(screen, writer)
 
     # main loop
     try:
@@ -53,18 +60,15 @@ def rcli(host, port):
                         connected = False
                     else:
                         con.feed_bytes(data)
-                # user entered a message
-                else:
-                    msg = os.read(fd, 1)
-                    if msg == b"\r":
-                        msg = b"\n"
-                    s.send(msg)
+                # user typed some keys here in the console
+                elif fd == term_fd:
+                    screen.handle_input(con)
 
         print("\r\nDisconnect.")
     except KeyboardInterrupt:
         print("\r\nBreak.")
     finally:
-        term.exit()
+        screen.exit()
 
     s.close()
     return 0
@@ -78,9 +82,7 @@ def parse_args():
     parser.add_argument(
         "-v", "--verbose", action="count", help="be more verbose", default=0
     )
-    parser.add_argument(
-        "-L", "--log-file", help="log file to write", default="rcli.log"
-    )
+    parser.add_argument("-L", "--log-file", help="log file to write")
     parser.add_argument("host", help="host name of Amiga with rclid server")
     parser.add_argument("-p", "--port", help="host port", type=int, default=2323)
 
@@ -97,7 +99,12 @@ def main():
         level = logging.INFO
     else:
         level = logging.DEBUG
-    logging.basicConfig(format=LOGGING_FORMAT, level=level, filename=opts.log_file)
+    if opts.log_file:
+        logging.basicConfig(
+            format=LOGGING_FORMAT, level=level, filename=opts.log_file, filemode="w"
+        )
+    else:
+        logging.basicConfig(format=LOGGING_FORMAT, level=level)
 
     # call main
     result = rcli(opts.host, opts.port)

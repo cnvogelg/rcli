@@ -60,10 +60,10 @@ static struct termio_key_code key_codes[] = {
   { "Right",  CSI "C" },
   { "Left",   CSI "D" },
 
-  { "Shift+Up",     CSI "A" },
-  { "Shift+Down",   CSI "B" },
-  { "Shift+Right",  CSI "C" },
-  { "Shift+Left",   CSI "D" },
+  { "Shift+Up",     CSI "T" },
+  { "Shift+Down",   CSI "S" },
+  { "Shift+Right",  CSI " A" },
+  { "Shift+Left",   CSI " @" },
 
   { NULL, NULL }
 };

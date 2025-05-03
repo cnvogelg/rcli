@@ -1,3 +1,9 @@
+import logging
+
+from .const import AmiControlChars as cc
+from .stream import ConsoleStream, Text, ControlChar, ControlSeq
+
+
 class ConsoleEvent:
     pass
 
@@ -79,25 +85,85 @@ class CharAttrEvent(ConsoleEvent):
         )
 
 
-class ResizeEvent(ConsoleEvent):
-    def __init__(self, w, h):
-        self.w = w
-        self.h = h
+class ConsoleEventStream:
+    def __init__(self):
+        self.stream = ConsoleStream()
+        self.shifted = False
 
-    def __repr__(self):
-        return f"Resize({self.w}, {self.h})"
+    def feed_bytes(self, data):
+        """feed bytes and return console events or None"""
+        result = []
+        events = self.stream.feed_bytes(data)
+        if events:
+            for ev in events:
+                out_ev = None
+                logging.debug("got event: %r", ev)
+                if type(ev) is Text:
+                    if self.shifted:
+                        txt = self._shift_txt(ev.txt)
+                    else:
+                        txt = ev.txt
+                    out_ev = TextEvent(txt)
+                elif type(ev) is ControlChar:
+                    logging.debug("control char: %02x", ev.char)
+                    out_ev = self._handle_ctl_char(ev.char)
+                elif type(ev) is ControlSeq:
+                    out_ev = self._handle_ctl_seq(ev)
+                else:
+                    logging.error("invalid event: %r", ev)
+                if out_ev:
+                    logging.debug("out event: %r", out_ev)
+                    result.append(out_ev)
+        if len(result) > 0:
+            logging.debug(f"feed return {len(result)} events")
+            return result
 
-    def __eq__(self, other):
-        return self.w == other.w and self.h == other.h
+    def _shift_txt(self, txt):
+        b = bytearray()
+        for t in txt:
+            if t < 0x80:
+                b.append(t + 0x80)
+            else:
+                b.append(t)
+        return bytes(b)
 
+    def _handle_ctl_char(self, char):
+        if char == cc.SHIFT_IN:
+            self.shifted = True
+        elif char == cc.SHIFT_OUT:
+            self.shifted = False
+        elif char == cc.NEXT_LINE:
+            return CtlCharEvent(cc.LINEFEED)
+        elif char == cc.H_TAB_SET:
+            return CmdEvent(CmdEvent.H_TAB_SET)
+        elif char in cc.valid_control_chars:
+            return CtlCharEvent(char)
+        else:
+            logging.info("unknown char: %r", char)
 
-class MoveCursorEvent(ConsoleEvent):
-    def __init__(self, dx, dy):
-        self.dx = dx
-        self.dy = dy
+    def _handle_ctl_seq(self, seq):
+        key = seq.get_key()
+        if key == "V":  # our custom set mode command
+            mode = seq.get_param(0)
+            logging.debug("set mode: %d", mode)
+            return ParamEvent(ParamEvent.MODE, mode)
+        elif key == "m":  # char attributes
+            logging.debug("raw char attr: %r", seq)
+            return self._handle_char_attr(
+                seq.get_all_params(None), seq.get_special(">", None)
+            )
+        else:
+            logging.error("invalid seq: %r", seq)
 
-    def __repr__(self):
-        return f"MoveCursor({self.dx}, {self.dy})"
-
-    def __eq__(self, other):
-        return self.dx == other.dx and self.dy == other.dy
+    def _handle_char_attr(self, params, back_col):
+        attr = None
+        fore_col = None
+        cell_col = None
+        for p in params:
+            if p < 30:
+                attr = p
+            elif p < 40:
+                fore_col = p - 30
+            elif p < 50:
+                cell_col = p - 40
+        return CharAttrEvent(attr, fore_col, cell_col, back_col)
