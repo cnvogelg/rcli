@@ -1,6 +1,9 @@
 #ifndef RCLID_H
 #define RCLID_H
 
+#define HANDSHAKE_LEN     4
+#define HANDSHAKE_STR     "CLI0"
+
 struct serv_data {
   int              socket;
 
@@ -20,6 +23,7 @@ struct serv_data {
   ULONG shell_stack;
 
   UBYTE csi_buf[4];
+  UBYTE handshake_buf[HANDSHAKE_LEN];
 };
 
 typedef struct serv_data serv_data_t;

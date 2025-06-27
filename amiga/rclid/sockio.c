@@ -34,6 +34,8 @@ struct sockio_handle {
   ULONG             msg_mask;
   ULONG             timer_mask;
   ULONG             state;
+  UBYTE             *push_back_buf;
+  ULONG             push_back_size;
 };
 
 sockio_handle_t *sockio_init(int socket, struct MsgPort *user_port, ULONG max_msgs)
@@ -274,6 +276,49 @@ static void handle_timer(sockio_handle_t *sio)
   }
 }
 
+static int handle_push_back(sockio_handle_t *sio, sockio_msg_t *rx_msg)
+{
+  int done = 0;
+  ULONG push_size = sio->push_back_size;
+  APTR  push_buf = sio->push_back_buf;
+
+  buf_t *rx_buf = &rx_msg->buffer;
+  ULONG rx_size = rx_buf->size - sio->rx_actual;
+  UBYTE *ptr = rx_buf->data + sio->rx_actual;
+
+  // more in push buf than in buf size
+  if(push_size > rx_size) {
+    // adjust push buf
+    sio->push_back_size -= rx_size;
+    sio->push_back_buf += rx_size;
+    push_size = rx_size;
+  } else {
+    sio->push_back_size = 0;
+    sio->push_back_buf = NULL;
+  }
+
+  LOG(("sockio: push back RX: %lx size=%ld\n", rx_msg, push_size));
+  CopyMem(push_buf, ptr, push_size);
+  sio->rx_actual += push_size;
+
+  // is rx done?
+  if(sio->rx_actual >= rx_msg->min_size) {
+    // store actual size
+    rx_buf->size = sio->rx_actual;
+    LOG(("sockio: push back RX reply: %lx size=%ld\n", rx_msg, rx_buf->size));
+    // remove from recv list
+    RemHead(&sio->recv_list);
+    // clear actual
+    sio->rx_actual = 0;
+    // reply message
+    ReplyMsg((struct Message *)rx_msg);
+
+    done = 1;
+  }
+
+  return done;
+}
+
 /* wait for socket io or other signals and return SOCKIO_HANDLE flags */
 void sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
 {
@@ -304,6 +349,14 @@ void sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
   if(tx_node != NULL) {
     tx_msg = (sockio_msg_t *)tx_node;
     tx_buf = &tx_msg->buffer;
+  }
+
+  // do we need to submit pushed back data?
+  if((rx_buf != NULL) && (sio->push_back_size > 0)) {
+    if(handle_push_back(sio, rx_msg)) {
+      rx_msg = NULL;
+      rx_buf = NULL;
+    }
   }
 
   LOG(("sockio: WAIT rx_msg %lx tx_msg %lx\n", rx_msg, tx_msg));
@@ -343,10 +396,10 @@ void sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
   }
 
   // do select and wait
-  LOG(("sockio: ENTER WAIT: mask=%lx rx_pend=%ld tx_pend=%ld wait_pend=%ld\n",
-    got_mask, (LONG)rx_pending, (LONG)tx_pending, (LONG)wait_pending));
+  //LOG(("sockio: ENTER WAIT: mask=%lx rx_pend=%ld tx_pend=%ld wait_pend=%ld\n",
+  //  got_mask, (LONG)rx_pending, (LONG)tx_pending, (LONG)wait_pending));
   long wait_result = WaitSelect(sio->socket + 1, &rx_fds, &tx_fds, NULL, NULL, &got_mask);
-  LOG(("sockio: LEAVE WAIT: res=%ld mask=%lx\n", wait_result, got_mask));
+  //LOG(("sockio: LEAVE WAIT: res=%ld mask=%lx\n", wait_result, got_mask));
 
   // we got an error
   if(wait_result == -1) {
@@ -499,6 +552,14 @@ void sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
   }
 
   LOG(("sockio: WAIT done. state=%ld\n", sio->state));
+}
+
+/* push some data back to receive buffer */
+void sockio_push_back(sockio_handle_t *sio, APTR buf, ULONG size)
+{
+  LOG(("sockio: push back %ld bytes\n", size));
+  sio->push_back_buf = buf;
+  sio->push_back_size = size;
 }
 
 /* submit recv buffer and return msg (to wait for reply).
