@@ -396,10 +396,10 @@ void sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
   }
 
   // do select and wait
-  //LOG(("sockio: ENTER WAIT: mask=%lx rx_pend=%ld tx_pend=%ld wait_pend=%ld\n",
-  //  got_mask, (LONG)rx_pending, (LONG)tx_pending, (LONG)wait_pending));
+  LOG(("sockio: ENTER WAIT: mask=%lx rx_pend=%ld tx_pend=%ld wait_pend=%ld\n",
+    got_mask, (LONG)rx_pending, (LONG)tx_pending, (LONG)wait_pending));
   long wait_result = WaitSelect(sio->socket + 1, &rx_fds, &tx_fds, NULL, NULL, &got_mask);
-  //LOG(("sockio: LEAVE WAIT: res=%ld mask=%lx\n", wait_result, got_mask));
+  LOG(("sockio: LEAVE WAIT: res=%ld mask=%lx\n", wait_result, got_mask));
 
   // we got an error
   if(wait_result == -1) {

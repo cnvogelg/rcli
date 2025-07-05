@@ -407,7 +407,7 @@ static void handle_dos_pkt(vcon_handle_t *sh, struct Message *msg)
       break;
   }
   if(do_reply) {
-      LOG(("vcon: reply: pkt=%lx res1=%ld res2=%ld\n", pkt, res1, res2));
+      LOG(("vcon: reply to DOS early: pkt=%lx res1=%ld res2=%ld\n", pkt, res1, res2));
       ReplyPkt(pkt, res1, res2);
   }
 }
@@ -450,7 +450,7 @@ static void handle_vmsg_reply(vcon_handle_t *sh, struct Message *msg)
   }
 
   if(pkt != NULL) {
-    LOG(("vcon: reply: pkt=%lx res1=%ld res2=%ld\n", pkt, res1, res2));
+    LOG(("vcon: reply to DOS: pkt=%lx res1=%ld res2=%ld\n", pkt, res1, res2));
     ReplyPkt(pkt, res1, res2);
   }
 

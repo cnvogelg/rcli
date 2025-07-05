@@ -21,13 +21,15 @@ static const char *TEMPLATE =
     "-P=PORT/N/K,"
     "-S=SERVICE/K,"
     "STACK/N/K,"
-    "-V=VERBOSE/S";
+    "-V=VERBOSE/S,"
+    "-L=LOGFILE/K";
 typedef struct
 {
   ULONG *port;
   char  *service;
   ULONG *stack;
   ULONG verbose;
+  char  *logfile;
 } params_t;
 static params_t params;
 
@@ -150,7 +152,16 @@ int runserv(ULONG port, const char *service, ULONG stack)
     SetSignal(0, sync_mask);
 
     // clone output
-    BPTR out = Open("*", MODE_OLDFILE);
+    BPTR out;
+    if(params.logfile != NULL) {
+      out = Open(params.logfile, MODE_NEWFILE);
+      if(out == 0) {
+        Printf("runserv: error opening logfile '%s'\n", params.logfile);
+        break;
+      }
+    } else {
+      out = Open("*", MODE_OLDFILE);
+    }
 
     // launch process
     struct Process *srv_proc = CreateNewProcTags(

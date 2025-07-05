@@ -211,6 +211,7 @@ static int handle_vcon_msg(serv_data_t *sd, vcon_msg_t *vmsg, BOOL socket_active
       }
     } else {
       LOG(("rclid: slurp vcon write!\n"));
+      // keep buffer->size to simulate complete write
     }
     break;
   }
@@ -230,6 +231,8 @@ static int handle_vcon_msg(serv_data_t *sd, vcon_msg_t *vmsg, BOOL socket_active
       }
     } else {
       LOG(("rclid: slurp vcon read!\n"));
+      // set EOF
+      buffer->size = 0;
     }
     break;
   }
@@ -240,6 +243,8 @@ static int handle_vcon_msg(serv_data_t *sd, vcon_msg_t *vmsg, BOOL socket_active
       result = handle_buffer_mode(sd, vmsg, &reply);
     } else {
       LOG(("rclid: slurp vcon buffer mode!\n"));
+      // set mode unsupported
+      vmsg->buffer_mode == VCON_MODE_UNSUPPORTED;
     }
     break;
   }
@@ -260,6 +265,8 @@ static int handle_vcon_msg(serv_data_t *sd, vcon_msg_t *vmsg, BOOL socket_active
       }
     } else {
       LOG(("rclid: slurp vcon wait char!\n"));
+      // set no char available
+      buffer->size = 0;
     }
     break;
   }
@@ -371,7 +378,7 @@ static void main_loop(serv_data_t *sd)
           socket_active = FALSE;
         }
         else if(result == HANDLE_END) {
-          LOG(("rclid: sockio ended."));
+          LOG(("rclid: sockio ended with EOF.\n"));
           socket_active = FALSE;
         }
       }
