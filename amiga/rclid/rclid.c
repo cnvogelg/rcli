@@ -244,7 +244,7 @@ static int handle_vcon_msg(serv_data_t *sd, vcon_msg_t *vmsg, BOOL socket_active
     } else {
       LOG(("rclid: slurp vcon buffer mode!\n"));
       // set mode unsupported
-      vmsg->buffer_mode == VCON_MODE_UNSUPPORTED;
+      vmsg->buffer_mode = VCON_MODE_UNSUPPORTED;
     }
     break;
   }
@@ -311,10 +311,6 @@ static int handle_sockio_msg(serv_data_t *sd, sockio_msg_t *msg)
     vmsg->buffer.size = got_char;
     break;
   }
-  case SOCKIO_MSG_END:
-    LOG(("rclid: sockio ended.\n"));
-    result = HANDLE_END;
-    break;
   case SOCKIO_MSG_ERROR:
     LOG(("rclid: sockio ERROR!\n"));
     result = HANDLE_ERROR;
@@ -352,9 +348,9 @@ static void main_loop(serv_data_t *sd)
 
     // wait/select/handle sockio
     ULONG sig_mask = masks;
-    LOG(("rclid: wait socket begin: sig_mask=%lx\n", sig_mask));
+    LOG(("rclid: wait socket sig_mask=%lx -> ", sig_mask));
     sockio_wait_handle(sd->sockio, &sig_mask);
-    LOG(("rclid: wait socket return: got sig_mask=%lx\n", sig_mask));
+    LOG(("got sig_mask=%lx\n", sig_mask));
 
     // do vcon
     if(vcon_mask & sig_mask) {
@@ -363,7 +359,6 @@ static void main_loop(serv_data_t *sd)
       if(!ok) {
         // error means vcon had some trouble allocating memory
         error_out(sd->socket, "Error: out of memory!\n");
-        sockio_end(sd->sockio);
       }
     }
 
@@ -377,10 +372,12 @@ static void main_loop(serv_data_t *sd)
           LOG(("rclid: sockio ended with ERROR!\n"));
           socket_active = FALSE;
         }
-        else if(result == HANDLE_END) {
-          LOG(("rclid: sockio ended with EOF.\n"));
-          socket_active = FALSE;
-        }
+      }
+
+      // still pending?
+      if(!sockio_has_pending(sd->sockio) && !vcon_active) {
+        LOG(("rclid: sockio: no more pending -> inactive\n"));
+        socket_active = FALSE;
       }
     }
 
@@ -400,10 +397,14 @@ static void main_loop(serv_data_t *sd)
         else if(result == HANDLE_END) {
           LOG(("rclid: vcon is done.\n"));
           vcon_active = FALSE;
-          // shut down socket
+          // is socketio still busy?
           if(socket_active) {
-            LOG(("rclid: shutdown sockio\n"));
-            sockio_end(sd->sockio);
+            if(!sockio_has_pending(sd->sockio)) {
+              LOG(("rclid: sockio: no pending -> inactive\n"));
+              socket_active = FALSE;
+            } else {
+              LOG(("rclid: sockio: has pending -> stay\n"));
+            }
           }
         }
       }

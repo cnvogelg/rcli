@@ -21,8 +21,7 @@ typedef struct sockio_msg sockio_msg_t;
 #define SOCKIO_MSG_RECV           0
 #define SOCKIO_MSG_SEND           1
 #define SOCKIO_MSG_WAIT_CHAR      2
-#define SOCKIO_MSG_END            3
-#define SOCKIO_MSG_ERROR          4
+#define SOCKIO_MSG_ERROR          3
 
 #define SOCKIO_ERROR_WAIT         0
 #define SOCKIO_ERROR_IO           1
@@ -52,10 +51,16 @@ void sockio_push_back(sockio_handle_t *sio, APTR buf, ULONG size);
 /* free returned message */
 void sockio_free_msg(sockio_handle_t *sio, sockio_msg_t *msg);
 
-/* flush and reply all pending recv, send, wait_char messages */
+/* flush and reply all pending recv and wait_char messages */
+void sockio_flush_recv(sockio_handle_t *sio);
+
+/* flush and reply all pending send messages */
+void sockio_flush_send(sockio_handle_t *sio);
+
+/* flush and reply all pending send/recv/wait messages */
 void sockio_flush(sockio_handle_t *sio);
 
-/* flush and end socket communication on user's request */
-void sockio_end(sockio_handle_t *sio);
+/* has pending recv/wait/send msgs in transit */
+BOOL sockio_has_pending(sockio_handle_t *sio);
 
 #endif

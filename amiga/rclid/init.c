@@ -99,11 +99,6 @@ BOOL init_loop(serv_data_t *sd)
           LOG(("rclid: init sent handshake\n"));
           stay = FALSE;
           break;
-        case SOCKIO_MSG_END:
-          stay = FALSE;
-          ok = FALSE;
-          LOG(("rclid: init sockio done\n"));
-          break;
         case SOCKIO_MSG_ERROR:
           stay = FALSE;
           ok = FALSE;

@@ -100,6 +100,12 @@ fail:
 
 void sockio_flush(sockio_handle_t *sio)
 {
+  sockio_flush_send(sio);
+  sockio_flush_recv(sio);
+}
+
+void sockio_flush_recv(sockio_handle_t *sio)
+{
   struct Node *node;
 
   // clean up recv list
@@ -111,20 +117,6 @@ void sockio_flush(sockio_handle_t *sio)
 
     // set EOF (size == 0)
     msg->buffer.size = 0;
-
-    // remove and reply job
-    Remove(node);
-    ReplyMsg((struct Message *)msg);
-
-    node = next_node;
-  }
-
-  // clean up send list
-  node = GetHead(&sio->send_list);
-  while(node != NULL) {
-    sockio_msg_t *msg = (sockio_msg_t *)node;
-    struct Node *next_node = GetSucc(node);
-    LOG(("sockio: flush send msg %lx\n", msg));
 
     // remove and reply job
     Remove(node);
@@ -152,6 +144,42 @@ void sockio_flush(sockio_handle_t *sio)
 
     node = next_node;
   }
+}
+
+void sockio_flush_send(sockio_handle_t *sio)
+{
+  struct Node *node;
+
+  // clean up send list
+  node = GetHead(&sio->send_list);
+  while(node != NULL) {
+    sockio_msg_t *msg = (sockio_msg_t *)node;
+    struct Node *next_node = GetSucc(node);
+    LOG(("sockio: flush send msg %lx\n", msg));
+
+    // remove and reply job
+    Remove(node);
+    ReplyMsg((struct Message *)msg);
+
+    node = next_node;
+  }
+}
+
+BOOL sockio_has_pending(sockio_handle_t *sio)
+{
+  if(GetHead(&sio->recv_list) != NULL) {
+    LOG(("sockio: pending recv!\n"));
+    return TRUE;
+  }
+  if(GetHead(&sio->wait_list) != NULL) {
+    LOG(("sockio: pending wait!\n"));
+    return TRUE;
+  }
+  if(GetHead(&sio->send_list) != NULL) {
+    LOG(("sockio: pending send!\n"));
+    return TRUE;
+  }
+  return FALSE;
 }
 
 void sockio_exit(sockio_handle_t *sio)
@@ -202,19 +230,6 @@ void sockio_free_msg(sockio_handle_t *sio, sockio_msg_t *msg)
   msg->type = SOCKIO_MSG_FREE;
 }
 
-static BOOL reply_end_msg(sockio_handle_t *sio)
-{
-  sockio_msg_t *msg = alloc_msg(sio, SOCKIO_MSG_END, NULL, 0, 0);
-  if(msg == NULL) {
-    LOG(("sockio: no mem for end msg!\n"));
-    return FALSE;
-  }
-
-  LOG(("scokio: reply end msg!\n"));
-  ReplyMsg((struct Message *)msg);
-  return TRUE;
-}
-
 static BOOL reply_error_msg(sockio_handle_t *sio, ULONG error)
 {
   // put error in min_size
@@ -227,15 +242,6 @@ static BOOL reply_error_msg(sockio_handle_t *sio, ULONG error)
   LOG(("scokio: reply error msg!\n"));
   ReplyMsg((struct Message *)msg);
   return TRUE;
-}
-
-void sockio_end(sockio_handle_t *sio)
-{
-  if(sio->state == SOCKIO_STATE_OK) {
-    sio->state = SOCKIO_STATE_EOF;
-    sockio_flush(sio);
-    reply_end_msg(sio);
-  }
 }
 
 static void handle_msg(sockio_handle_t *sio, sockio_msg_t *msg)
@@ -332,8 +338,12 @@ void sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
 
   // if set to EOF then flush all pending requests and
   // do not wait on actual transfers
-  if(sio->state != SOCKIO_STATE_OK) {
-    LOG(("sockio: WAIT flush on EOF\n"));
+  if(sio->state == SOCKIO_STATE_EOF) {
+    LOG(("sockio: WAIT flush recv on EOF\n"));
+    sockio_flush_recv(sio);
+  }
+  else if(sio->state == SOCKIO_STATE_ERROR) {
+    LOG(("sockio: WAIT flush recv/send on ERROR\n"));
     sockio_flush(sio);
   }
 
@@ -453,7 +463,6 @@ void sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
     }
   }
 
-  BOOL end = FALSE;
   BOOL error = FALSE;
 
   // handle socket RX
@@ -481,7 +490,14 @@ void sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
       else {
         LOG(("sockio: RX EOF!\n"));
         sio->state = SOCKIO_STATE_EOF;
-        end = TRUE;
+        // remove from recv list
+        RemHead(&sio->recv_list);
+        // clear actual
+        sio->rx_actual = 0;
+        // return EOF
+        rx_buf->size = 0;
+        // reply message
+        ReplyMsg((struct Message *)rx_msg);
       }
     }
 
@@ -520,15 +536,13 @@ void sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
         LOG(("sockio: TX_DATA: actual=%ld size=%ld\n", sio->tx_actual, tx_buf->size));
       }
       else {
-        LOG(("sockio: TX EOF!\n"));
-        sio->state = SOCKIO_STATE_EOF;
-        end = TRUE;
+        LOG(("sockio: TX DATA: no data sent!\n"));
       }
     }
 
     // is tx done?
     if(tx_buf->size == sio->tx_actual) {
-      LOG(("sockio: TX reply: %lx size=%ld", tx_msg, tx_buf->size));
+      LOG(("sockio: TX reply: %lx size=%ld\n", tx_msg, tx_buf->size));
       // remove from send list
       RemHead(&sio->send_list);
       // clear actual
@@ -536,13 +550,6 @@ void sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
       // reply msg
       ReplyMsg((struct Message *)tx_msg);
     }
-  }
-
-  // sio end state reached?
-  if(end) {
-    LOG(("sockio: WAIT end reached %ld\n", sio->state));
-    sockio_flush(sio);
-    reply_end_msg(sio);
   }
 
   if(error) {
@@ -566,7 +573,7 @@ void sockio_push_back(sockio_handle_t *sio, APTR buf, ULONG size)
    min_size allows to receive less data. 0=size */
 sockio_msg_t *sockio_recv(sockio_handle_t *sio, APTR buf, ULONG max_size, ULONG min_size)
 {
-  if(sio->state != SOCKIO_STATE_OK) {
+  if(sio->state == SOCKIO_STATE_ERROR) {
     LOG(("sockio: wrong state for recv!\n"));
     return NULL;
   }
@@ -586,7 +593,7 @@ sockio_msg_t *sockio_recv(sockio_handle_t *sio, APTR buf, ULONG max_size, ULONG 
 /* submit send buffer and return msg (to wait for reply) */
 sockio_msg_t *sockio_send(sockio_handle_t *sio, APTR buf, ULONG size)
 {
-  if(sio->state != SOCKIO_STATE_OK) {
+  if(sio->state == SOCKIO_STATE_ERROR) {
     LOG(("sockio: wrong state for send!\n"));
     return NULL;
   }
@@ -606,7 +613,7 @@ sockio_msg_t *sockio_send(sockio_handle_t *sio, APTR buf, ULONG size)
 /* submit wait char message */
 sockio_msg_t *sockio_wait_char(sockio_handle_t *sio, ULONG timeout_us)
 {
-  if(sio->state != SOCKIO_STATE_OK) {
+  if(sio->state == SOCKIO_STATE_ERROR) {
     LOG(("sockio: wrong state for wait char!\n"));
     return NULL;
   }

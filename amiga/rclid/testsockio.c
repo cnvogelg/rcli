@@ -10,8 +10,7 @@
 #include "sockio.h"
 
 static UBYTE buffer[1024];
-static sockio_msg_t *rx_msg;
-static sockio_msg_t *tx_msg;
+static sockio_msg_t *end_msg;
 static sockio_msg_t *wait_msg;
 
 static BOOL handle_msg(sockio_handle_t *sio, sockio_msg_t *msg)
@@ -24,13 +23,22 @@ static BOOL handle_msg(sockio_handle_t *sio, sockio_msg_t *msg)
     // is EOF?
     if(msg->buffer.size == 0) {
       PutStr("test: recv EOF!\n");
+      end_msg = sockio_send(sio, "BYE.\n", 5);
+      if(end_msg == NULL) {
+        PutStr("test: ERROR setting up tx msg!\n");
+        stay = FALSE;
+      }
       break;
     }
 
     // if msg starts with 'q' then end
     if(msg->buffer.data[0] == 'q') {
       Printf("test: QUITTING...\n");
-      sockio_end(sio);
+      end_msg = sockio_send(sio, "bye.\n", 5);
+      if(end_msg == NULL) {
+        PutStr("test: ERROR setting up tx msg!\n");
+        stay = FALSE;
+      }
       break;
     }
 
@@ -47,7 +55,7 @@ static BOOL handle_msg(sockio_handle_t *sio, sockio_msg_t *msg)
       }
     }
     // reply received msg
-    tx_msg = sockio_send(sio, msg->buffer.data, msg->buffer.size);
+    sockio_msg_t *tx_msg = sockio_send(sio, msg->buffer.data, msg->buffer.size);
     if(tx_msg == NULL) {
       PutStr("test: ERROR setting up tx msg!\n");
     } else {
@@ -55,8 +63,13 @@ static BOOL handle_msg(sockio_handle_t *sio, sockio_msg_t *msg)
     }
     break;
   case SOCKIO_MSG_SEND:
+    if(msg == end_msg) {
+        PutStr("test: goodbye!\n");
+        stay = FALSE;
+        break;
+    }
     // start receiving again
-    rx_msg = sockio_recv(sio, buffer, 1024, 1);
+    sockio_msg_t *rx_msg = sockio_recv(sio, buffer, 1024, 1);
     if(rx_msg == NULL) {
       PutStr("test: ERROR setting up rx msg!\n");
     } else {
@@ -68,11 +81,8 @@ static BOOL handle_msg(sockio_handle_t *sio, sockio_msg_t *msg)
     ULONG got_char = msg->buffer.size;
     Printf("test: WAIT CHAR result: got_char=%ld\n", got_char);
     wait_msg = NULL;
-    break;
-  }
-  case SOCKIO_MSG_END: {
-    PutStr("test: END msg!\n");
-    stay = FALSE;
+    // send reply
+    sockio_send(sio, "waited!\n", 8);
     break;
   }
   case SOCKIO_MSG_ERROR: {
@@ -89,7 +99,7 @@ static BOOL handle_msg(sockio_handle_t *sio, sockio_msg_t *msg)
 static int main_loop(sockio_handle_t *sio, struct MsgPort *msg_port)
 {
   // allow buf to be filled
-  rx_msg = sockio_recv(sio, buffer, 1024, 1);
+  sockio_msg_t *rx_msg = sockio_recv(sio, buffer, 1024, 1);
   if(rx_msg == NULL) {
     PutStr("test: No rx msg\n");
     return RETURN_FAIL;
@@ -106,8 +116,8 @@ static int main_loop(sockio_handle_t *sio, struct MsgPort *msg_port)
     Printf("test: wait sig mask=%lx\n", sig_mask);
 
     if(sig_mask & SIGBREAKF_CTRL_D) {
-      PutStr("test: End\n");
-      sockio_end(sio);
+      PutStr("test: Flush!\n");
+      sockio_flush(sio);
     }
     if(sig_mask & SIGBREAKF_CTRL_C) {
       PutStr("test: Break!\n");
