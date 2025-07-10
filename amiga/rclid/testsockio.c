@@ -26,8 +26,8 @@ static BOOL handle_msg(sockio_handle_t *sio, sockio_msg_t *msg)
       end_msg = sockio_send(sio, "BYE.\n", 5);
       if(end_msg == NULL) {
         PutStr("test: ERROR setting up tx msg!\n");
-        stay = FALSE;
       }
+      stay = FALSE;
       break;
     }
 
@@ -140,12 +140,21 @@ static int main_loop(sockio_handle_t *sio, struct MsgPort *msg_port)
   return RETURN_OK;
 }
 
+// own args
+static const char *template = SERV_ARGS_TEMPLATE ",MORE/F";
+typedef struct {
+  serv_params_t serv;
+  char *more;
+} my_args;
+static my_args args;
+
 int main(void)
 {
-  int socket = serv_init();
+  int socket = serv_init("testsockio", template, (serv_params_t *)&args);
   if(socket == -1) {
     return RETURN_FAIL;
   }
+  Printf("got more args: %s\n", args.more);
 
   struct MsgPort *msg_port = CreateMsgPort();
   if(msg_port == NULL) {

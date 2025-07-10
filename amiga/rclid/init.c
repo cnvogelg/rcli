@@ -33,8 +33,11 @@ BOOL init_loop(serv_data_t *sd)
   sockio_msg_t *msg = NULL;
   UBYTE *seq = sd->handshake_buf;
 
+  // from ms to us
+  ULONG init_wait_us = sd->options->init_wait * 1000UL;
+
   // start wait
-  msg = sockio_wait_char(sd->sockio, sd->init_wait_us);
+  msg = sockio_wait_char(sd->sockio, init_wait_us);
   if(msg == NULL) {
     error_out(sd->socket, "Error waiting!");
     return FALSE;

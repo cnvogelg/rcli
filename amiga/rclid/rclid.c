@@ -26,19 +26,40 @@
 extern struct DosLibrary *DOSBase;
 extern struct Library *SocketBase;
 
+// ReadArgs template string
+static const char *template = SERV_ARGS_TEMPLATE
+  ",STACK_SIZE/K/N"
+  ",MAX_MSGS/K/N"
+  ",INIT_WAIT/K/N"
+  ",CMD=COMMAND/K";
+
+// ReadArgs struct matching template
+typedef struct {
+  serv_params_t serv;
+  ULONG *stack_size;
+  ULONG *max_msgs;
+  ULONG *init_wait;
+  char *command;
+} params_t;
+
 void error_out(int socket, const char *msg)
 {
+  const char prefix[] = "rclid: ";
+  send(socket, prefix, sizeof(prefix), 0);
   send(socket, msg, strlen(msg), 0);
   LOG(("ERROR_OUT: '%s' errno=%ld\n", msg, Errno()));
 }
 
-static serv_data_t *init_rclid(int socket, ULONG shell_stack, ULONG max_msgs, ULONG init_wait_us)
+static serv_data_t *init_rclid(int socket, serv_options_t *options)
 {
   serv_data_t *sd = (serv_data_t *)AllocVec(sizeof(serv_data_t), MEMF_CLEAR | MEMF_ANY);
   if(sd == NULL) {
     error_out(socket, "ERROR allocating seerver data!\n");
     return NULL;
   }
+
+  // keep options
+  sd->options = options;
 
   // set socket lib options
   // disable SIGINT via Ctrl-C. we use sig mask for that
@@ -59,23 +80,20 @@ static serv_data_t *init_rclid(int socket, ULONG shell_stack, ULONG max_msgs, UL
   sd->sockio_port_mask = 1 << sd->sockio_port->mp_SigBit;
 
   // create sockio
-  sockio_handle_t *sockio = sockio_init(socket, sd->sockio_port, max_msgs);
+  sockio_handle_t *sockio = sockio_init(socket, sd->sockio_port, options->max_msgs);
   if(sockio == NULL) {
     error_out(socket, "ERROR opening sockio!\n");
     return NULL;
   }
   sd->sockio = sockio;
 
-  // how long to wait for init hand shake
-  sd->init_wait_us = init_wait_us;
-  sd->max_msgs = max_msgs;
-  sd->shell_stack = shell_stack;
-
   return sd;
 }
 
 static BOOL start_shell(serv_data_t *sd)
 {
+  serv_options_t *opts = sd->options;
+
   // create vcon port
   sd->vcon_port = CreateMsgPort();
   if(sd->vcon_port == NULL) {
@@ -85,7 +103,7 @@ static BOOL start_shell(serv_data_t *sd)
   sd->vcon_port_mask = 1 << sd->vcon_port->mp_SigBit;
 
   // setup virtual console for this sesion
-  vcon_handle_t *vcon = vcon_init(sd->vcon_port, sd->max_msgs);
+  vcon_handle_t *vcon = vcon_init(sd->vcon_port, opts->max_msgs);
   if(vcon == NULL) {
     error_out(sd->socket, "ERROR opening virtual console!\n");
     return FALSE;
@@ -94,7 +112,7 @@ static BOOL start_shell(serv_data_t *sd)
 
   // create shell and use console
   BPTR fh = vcon_create_fh(vcon);
-  shell_handle_t *sh = shell_init(fh, ZERO, NULL, sd->shell_stack);
+  shell_handle_t *sh = shell_init(fh, ZERO, NULL, opts->stack_size);
   if(sh == NULL) {
     error_out(sd->socket, "ERROR opening shell!\n");
     return FALSE;
@@ -131,6 +149,8 @@ static void exit_rclid(serv_data_t *sd)
   if(sd->vcon_port != NULL) {
     DeleteMsgPort(sd->vcon_port);
   }
+
+  FreeVec(sd);
 }
 
 #define HANDLE_OK     0
@@ -414,14 +434,45 @@ static void main_loop(serv_data_t *sd)
   LOG(("rclid: leave main\n"));
 }
 
+static void parse_options(params_t *params, serv_options_t *options)
+{
+  if(params->stack_size != NULL) {
+    options->stack_size = *params->stack_size;
+  } else {
+    options->stack_size = 8192; //bytes
+  }
+
+  if(params->max_msgs != NULL) {
+    options->max_msgs = *params->max_msgs;
+  } else {
+    options->max_msgs = 8;
+  }
+
+  if(params->init_wait != NULL) {
+    options->init_wait = *params->init_wait;
+  } else {
+    options->init_wait = 200; //ms
+  }
+
+  LOG(("rclid: options: stack_size=%lu, max_msgs=%lu, init_wait=%lu\n",
+    options->stack_size,
+    options->max_msgs,
+    options->init_wait));
+}
+
+static params_t params;
+static serv_options_t options;
+
 int main(void)
 {
-  int socket = serv_init();
+  int socket = serv_init("rclid", template, (serv_params_t *)&params);
   if(socket == -1) {
     return RETURN_FAIL;
   }
 
-  serv_data_t *sd = init_rclid(socket, 8192, 8, 200000UL);
+  parse_options(&params, &options);
+
+  serv_data_t *sd = init_rclid(socket, &options);
   if(sd != NULL) {
     if(init_loop(sd)) {
       if(start_shell(sd)) {
@@ -432,8 +483,6 @@ int main(void)
     }
   }
   exit_rclid(sd);
-
-  FreeVec(sd);
 
   serv_exit(socket);
 

@@ -4,8 +4,17 @@
 #define HANDSHAKE_LEN     4
 #define HANDSHAKE_STR     "CLI0"
 
-struct serv_data {
+// final options
+typedef struct {
+  ULONG  stack_size;
+  ULONG  max_msgs;
+  ULONG  init_wait;
+  char   *command;
+} serv_options_t;
+
+typedef struct {
   int              socket;
+  serv_options_t  *options;
 
   vcon_handle_t   *vcon;
   shell_handle_t  *shell;
@@ -17,16 +26,11 @@ struct serv_data {
   ULONG sockio_port_mask;
   ULONG vcon_port_mask;
 
-  ULONG init_wait_us;
   ULONG flags;
-  ULONG max_msgs;
-  ULONG shell_stack;
 
   UBYTE csi_buf[4];
   UBYTE handshake_buf[HANDSHAKE_LEN];
-};
-
-typedef struct serv_data serv_data_t;
+} serv_data_t;
 
 #define FLAG_PASSIVE  1
 #define FLAG_MEDIUM   2

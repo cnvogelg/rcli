@@ -11,6 +11,8 @@
 
 #include "compiler.h"
 
+#define ARG_BUF_SIZE 256
+
 /* lib bases */
 extern struct ExecBase *SysBase;
 struct DosLibrary *DOSBase;
@@ -22,7 +24,8 @@ static const char *TEMPLATE =
     "-S=SERVICE/K,"
     "STACK/N/K,"
     "-V=VERBOSE/S,"
-    "-L=LOGFILE/K";
+    "-L=LOGFILE/K,"
+    "PARAM/F";
 typedef struct
 {
   ULONG *port;
@@ -30,6 +33,7 @@ typedef struct
   ULONG *stack;
   ULONG verbose;
   char  *logfile;
+  char  *args;
 } params_t;
 static params_t params;
 
@@ -69,7 +73,7 @@ LONG setup_listen_socket(ULONG port)
 }
 
 /* ----- tool ----- */
-int runserv(ULONG port, const char *service, ULONG stack)
+int runserv(ULONG port, const char *service, ULONG stack, const char *args)
 {
   // get sync signal
   BYTE sync_signal = AllocSignal(-1);
@@ -140,10 +144,15 @@ int runserv(ULONG port, const char *service, ULONG stack)
     }
 
     // prepare args for service
-    char arg_line[80];
+    char arg_line[ARG_BUF_SIZE];
     struct Task *my_task = FindTask(NULL);
-    sprintf(arg_line, "SOCKET %lu TASK %lu SIGNAL %lu",
-        (ULONG)sock_id, (ULONG)my_task, (ULONG)sync_signal);
+    if(args != NULL) {
+      snprintf(arg_line, ARG_BUF_SIZE, "SOCKET %lu TASK %lu SIGNAL %lu %s",
+          (ULONG)sock_id, (ULONG)my_task, (ULONG)sync_signal, args);
+    } else {
+      snprintf(arg_line, ARG_BUF_SIZE, "SOCKET %lu TASK %lu SIGNAL %lu",
+          (ULONG)sock_id, (ULONG)my_task, (ULONG)sync_signal);
+    }
     Printf("runserv: launching '%s' with args '%s' and stack %ld\n",
         service, arg_line, stack);
 
@@ -154,6 +163,7 @@ int runserv(ULONG port, const char *service, ULONG stack)
     // clone output
     BPTR out;
     if(params.logfile != NULL) {
+      Printf("runserv: writing to log file '%s'\n", params.logfile);
       out = Open(params.logfile, MODE_NEWFILE);
       if(out == 0) {
         Printf("runserv: error opening logfile '%s'\n", params.logfile);
@@ -250,7 +260,7 @@ int main(void)
     stack = 12000;
   }
 
-  result = runserv(port, service, stack);
+  result = runserv(port, service, stack, params.args);
 
   /* free args */
   FreeArgs(args);
