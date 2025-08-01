@@ -163,7 +163,7 @@ int main(void)
 
   int result = RETURN_FAIL;
   PutStr("test: setting up sockio...\n");
-  sockio_handle_t *sio = sockio_init(socket, msg_port, 8);
+  sockio_handle_t *sio = sockio_init(socket, msg_port, 8, 0);
   if(sio != NULL) {
     PutStr("test: main loop\n");
     result = main_loop(sio, msg_port);

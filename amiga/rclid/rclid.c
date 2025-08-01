@@ -20,6 +20,7 @@
 #include "sockio.h"
 #include "rclid.h"
 #include "init.h"
+#include "conv.h"
 
 #define ZERO 0
 
@@ -31,7 +32,9 @@ static const char *template = SERV_ARGS_TEMPLATE
   ",STACK_SIZE/K/N"
   ",MAX_MSGS/K/N"
   ",INIT_WAIT/K/N"
-  ",CMD=COMMAND/K";
+  ",CMD=COMMAND/K"
+  ",NO_SIG=NO_SIGNALS/S"
+  ",BUF_SIZE/K/N";
 
 // ReadArgs struct matching template
 typedef struct {
@@ -40,6 +43,8 @@ typedef struct {
   ULONG *max_msgs;
   ULONG *init_wait;
   char *command;
+  ULONG *no_signals;
+  ULONG *buf_size;
 } params_t;
 
 void error_out(int socket, const char *msg)
@@ -60,6 +65,9 @@ static serv_data_t *init_rclid(int socket, serv_options_t *options)
 
   // keep options
   sd->options = options;
+  // take over flags
+  sd->flags = options->flags;
+  LOG(("rclid: init. flags=%lx\n", sd->flags));
 
   // set socket lib options
   // disable SIGINT via Ctrl-C. we use sig mask for that
@@ -80,7 +88,7 @@ static serv_data_t *init_rclid(int socket, serv_options_t *options)
   sd->sockio_port_mask = 1 << sd->sockio_port->mp_SigBit;
 
   // create sockio
-  sockio_handle_t *sockio = sockio_init(socket, sd->sockio_port, options->max_msgs);
+  sockio_handle_t *sockio = sockio_init(socket, sd->sockio_port, options->max_msgs, options->push_back_max);
   if(sockio == NULL) {
     error_out(socket, "ERROR opening sockio!\n");
     return NULL;
@@ -309,6 +317,33 @@ static int handle_vcon_msg(serv_data_t *sd, vcon_msg_t *vmsg, BOOL socket_active
   return result;
 }
 
+static void process_sock_incoming_buffer(serv_data_t *sd, vcon_msg_t *vmsg)
+{
+  signal_info_t info;
+
+  LOG(("rclid: begin process incoming sockio: size=%ld\n", vmsg->buffer.size));
+  ULONG changes = conv_extract_signals(&vmsg->buffer, &info);
+  LOG(("rclid: process sock incoming buffer: size=%ld changes=%ld\n", vmsg->buffer.size, changes));
+
+  if(changes > 0) {
+    ULONG sigmask = 0;
+    if(info.count[0] > 0) {
+      sigmask |= SIGBREAKF_CTRL_C;
+    }
+    if(info.count[1] > 0) {
+      sigmask |= SIGBREAKF_CTRL_D;
+    }
+    if(info.count[2] > 0) {
+      sigmask |= SIGBREAKF_CTRL_E;
+    }
+    if(info.count[3] > 0) {
+      sigmask |= SIGBREAKF_CTRL_F;
+    }
+    LOG(("rclid: post sigmask %lx\n", sigmask));
+    vcon_send_signal(sd->vcon, sigmask);
+  }
+}
+
 static int handle_sockio_msg(serv_data_t *sd, sockio_msg_t *msg)
 {
   LOG(("rclid: handle sockio msg: type=%ld\n", (LONG)msg->type));
@@ -319,7 +354,41 @@ static int handle_sockio_msg(serv_data_t *sd, sockio_msg_t *msg)
   switch(msg->type) {
   case SOCKIO_MSG_RECV:
     LOG(("rclid: sockio recv done: msg=%lx -> vmsg=%lx (size=%ld)\n", msg, vmsg, buffer->size));
+    ULONG old_size = vmsg->buffer.size;
     vmsg->buffer.size = buffer->size;
+
+    /* if not EOF yet */
+    if(vmsg->buffer.size > 0) {
+
+      /* process read buffer? */
+      if((sd->flags & FLAG_SIGNALS) == FLAG_SIGNALS) {
+        process_sock_incoming_buffer(sd, vmsg);
+      }
+
+      /* if no more regular bytes are left after processing
+         then trigger new read */
+      if(vmsg->buffer.size == 0) {
+        // free old message that is already used up
+        sockio_free_msg(sd->sockio, msg);
+
+        // start receiving from sockio again
+        LOG(("rclid: sockio read again: size=%ld\n", old_size));
+        msg = sockio_recv(sd->sockio, vmsg->buffer.data, old_size, 1);
+        if(msg == NULL) {
+          error_out(sd->socket, "Error in sockio_recv!\n");
+          result = HANDLE_ERROR;
+        } else {
+          LOG(("rclid: old vcon read msg=%lx -> sockio: new msg=%lx\n", vmsg, msg));
+          // remember associated vmsg (to reply later)
+          msg->user_data = vmsg;
+          // do not reply vmsg yet
+          vmsg = NULL;
+          // do not delete new msg
+          msg = NULL;
+        }
+      }
+    }
+
     break;
   case SOCKIO_MSG_SEND:
     LOG(("rclid: sockio send done: msg=%lx -> vmsg=%lx (size=%ld)\n", msg, vmsg, buffer->size));
@@ -341,7 +410,9 @@ static int handle_sockio_msg(serv_data_t *sd, sockio_msg_t *msg)
   }
 
   // finish sockio msg
-  sockio_free_msg(sd->sockio, msg);
+  if(msg != NULL) {
+    sockio_free_msg(sd->sockio, msg);
+  }
 
   // if a vmsg was attached then reply it
   if(vmsg != NULL) {
@@ -454,10 +525,25 @@ static void parse_options(params_t *params, serv_options_t *options)
     options->init_wait = 200; //ms
   }
 
-  LOG(("rclid: options: stack_size=%lu, max_msgs=%lu, init_wait=%lu\n",
+  if(params->no_signals != NULL) {
+    options->flags = 0;
+  } else {
+    // by default signal handling is on
+    options->flags = FLAG_SIGNALS;
+  }
+
+  if(params->buf_size != NULL) {
+    options->push_back_max = *params->buf_size;
+  } else {
+    options->push_back_max = 256;
+  }
+
+  LOG(("rclid: options: stack_size=%lu, max_msgs=%lu, init_wait=%lu, pb_max=%lu\n",
     options->stack_size,
     options->max_msgs,
-    options->init_wait));
+    options->init_wait,
+    options->push_back_max));
+  LOG(("rclid: options: flags=%lx\n", options->flags));
 }
 
 static params_t params;

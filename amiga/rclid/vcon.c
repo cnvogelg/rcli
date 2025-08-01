@@ -22,7 +22,8 @@
 
 struct vcon_handle {
   struct MsgPort          *pkt_port;
-  struct MsgPort          *signal_port;
+  struct MsgPort          *read_signal_port;
+  struct MsgPort          *write_signal_port;
   struct MsgPort          *user_port;
   struct MsgPort          *vmsg_port;
   struct List              free_vmsg_list;
@@ -194,16 +195,45 @@ ULONG vcon_get_sigmask(vcon_handle_t *sh)
   return sh->pkt_sigmask | sh->vmsg_sigmask;
 }
 
+static void send_task_signal(struct MsgPort *port, ULONG sig_mask)
+{
+  struct Task *task = port->mp_SigTask;
+  LOG(("vcon: send signals %lx to task %lx\n", sig_mask, task));
+  if(task != NULL) {
+    Signal(task, sig_mask);
+  }
+}
+
 BOOL vcon_send_signal(vcon_handle_t *sh, ULONG sig_mask)
 {
-  if(sh->signal_port != NULL) {
-    struct Task *task = sh->signal_port->mp_SigTask;
-    if(task != NULL) {
-      Signal(task, sig_mask);
-      return TRUE;
-    }
+  struct MsgPort *port;
+  BOOL sent = FALSE;
+
+  port = sh->read_signal_port;
+  if(port != NULL) {
+    send_task_signal(port, sig_mask);
+    sent = TRUE;
   }
-  return FALSE;
+
+  port = sh->write_signal_port;
+  if(port != NULL) {
+    send_task_signal(port, sig_mask);
+    sent = TRUE;
+  }
+
+  return sent;
+}
+
+static void clean_signals(vcon_handle_t *sh, struct MsgPort *port)
+{
+  if(sh->read_signal_port == port) {
+    LOG(("vcon: clean read_signal_port %lx\n", port));
+    sh->read_signal_port = NULL;
+  }
+  if(sh->write_signal_port == port) {
+    LOG(("vcon: clean write_signal_port %lx\n", port));
+    sh->write_signal_port = NULL;
+  }
 }
 
 static vcon_msg_t *alloc_vmsg(vcon_handle_t *sh, UBYTE type, APTR data, ULONG size, APTR private)
@@ -277,8 +307,8 @@ static void handle_dos_pkt(vcon_handle_t *sh, struct Message *msg)
       LOG(("vcon: CHANGE_SIGNAL: fh=%lx msg_port=%lx\n", fh, msg_port));
       /* return old port */
       res1 = DOSTRUE;
-      res2 = (LONG)sh->signal_port;
-      sh->signal_port = msg_port;
+      res2 = (LONG)sh->read_signal_port;
+      sh->read_signal_port = msg_port;
       break;
     }
     case ACTION_SCREEN_MODE: {
@@ -342,6 +372,8 @@ static void handle_dos_pkt(vcon_handle_t *sh, struct Message *msg)
           sh->state = VCON_STATE_ERROR;
         }
       }
+      /* implicitly set signal port to reader */
+      sh->write_signal_port = pkt->dp_Port;
       break;
     }
     case ACTION_READ: {
@@ -363,7 +395,7 @@ static void handle_dos_pkt(vcon_handle_t *sh, struct Message *msg)
           sh->state = VCON_STATE_ERROR;
         }
         /* implicitly set signal port to reader */
-        sh->signal_port = pkt->dp_Port;
+        sh->read_signal_port = pkt->dp_Port;
       }
       break;
     }

@@ -29,7 +29,7 @@ typedef struct sockio_msg sockio_msg_t;
 struct sockio_handle;
 typedef struct sockio_handle sockio_handle_t;
 
-sockio_handle_t *sockio_init(int socket, struct MsgPort *user_port, ULONG max_msgs);
+sockio_handle_t *sockio_init(int socket, struct MsgPort *user_port, ULONG max_msgs, ULONG push_back_size);
 void sockio_exit(sockio_handle_t *sio);
 
 /* wait for socket io or other signals and return state. sig_mask is in/out param */
@@ -46,7 +46,7 @@ sockio_msg_t *sockio_send(sockio_handle_t *sio, APTR buf, ULONG size);
 sockio_msg_t *sockio_wait_char(sockio_handle_t *sio, ULONG timeout_us);
 
 /* push some data back to receive buffer */
-void sockio_push_back(sockio_handle_t *sio, APTR buf, ULONG size);
+BOOL sockio_push_back(sockio_handle_t *sio, APTR buf, ULONG size);
 
 /* free returned message */
 void sockio_free_msg(sockio_handle_t *sio, sockio_msg_t *msg);

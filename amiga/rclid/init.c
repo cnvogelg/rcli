@@ -59,7 +59,8 @@ BOOL init_loop(serv_data_t *sd)
           if(smsg->buffer.size == 1) {
             // epxect init handshake "CLIx"
             seq[4] = 0;
-            msg = sockio_recv(sd->sockio, seq, HANDSHAKE_LEN, HANDSHAKE_LEN);
+            // allow at least 1 byte
+            msg = sockio_recv(sd->sockio, seq, HANDSHAKE_LEN, 1);
             if(msg == NULL) {
               LOG(("rclid: init recv ERROR!\n"));
               stay = FALSE;
@@ -73,31 +74,52 @@ BOOL init_loop(serv_data_t *sd)
             LOG(("rclid: no char -> passive!\n"));
           }
           break;
-        case SOCKIO_MSG_RECV:
-          LOG(("rclid: init got handshake: %s\n", seq));
-          if(strncmp(seq, HANDSHAKE_STR, HANDSHAKE_LEN - 1)!=0) {
+        case SOCKIO_MSG_RECV: {
+          ULONG size = smsg->buffer.size;
+          LOG(("rclid: init got handshake: size=%ld %s\n", size, seq));
+          if((size < HANDSHAKE_LEN) || (strncmp(seq, HANDSHAKE_STR, HANDSHAKE_LEN - 1)!=0)) {
             LOG(("rclid: wrong handshake -> passive!\n"));
             stay = FALSE;
             sd->flags |= FLAG_PASSIVE;
             // push back data so it won't get lost
-            sockio_push_back(sd->sockio, seq, HANDSHAKE_LEN);
-          } else {
-            // CLI1 = support medium mode
-            // CLI0 = no medium mode
-            UBYTE mode = seq[3];
-            if(mode == '1') {
-              sd->flags |= FLAG_MEDIUM;
-            }
-            // answer
-            msg = sockio_send(sd->sockio, seq, HANDSHAKE_LEN);
-            if(msg == NULL) {
-              LOG(("rclid: init send ERROR!\n"));
+            if(!sockio_push_back(sd->sockio, seq, size)) {
+              LOG(("rclid: failed push back!\n"));
               stay = FALSE;
               ok = FALSE;
             }
-            state = INIT_STATE_SEND;
+          } else {
+            // CLIx: handshake with flags number
+            // x =  0 no flags
+            // x |= 1 medium mode
+            // x |= 2 signals
+            UBYTE flags = seq[3];
+            // make sure flags are number
+            if((flags < '0') || (flags > '9')) {
+              LOG(("rclid: init send wrong flags ERROR!\n"));
+              stay = FALSE;
+              ok = FALSE;
+            } else {
+              LOG(("rclid: got flags %x\n", flags));
+              flags -= '0';
+              sd->flags = 0;
+              if(flags & 1) {
+                sd->flags |= FLAG_MEDIUM;
+              }
+              if(flags & 2) {
+                sd->flags |= FLAG_SIGNALS;
+              }
+              // handshake ok: echo handshake back
+              msg = sockio_send(sd->sockio, seq, HANDSHAKE_LEN);
+              if(msg == NULL) {
+                LOG(("rclid: init send ERROR!\n"));
+                stay = FALSE;
+                ok = FALSE;
+              }
+              state = INIT_STATE_SEND;
+            }
           }
           break;
+        }
         case SOCKIO_MSG_SEND:
           LOG(("rclid: init sent handshake\n"));
           stay = FALSE;

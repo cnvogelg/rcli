@@ -9,7 +9,9 @@ typedef struct {
   ULONG  stack_size;
   ULONG  max_msgs;
   ULONG  init_wait;
+  ULONG  push_back_max;
   char   *command;
+  ULONG  flags;
 } serv_options_t;
 
 typedef struct {
@@ -34,6 +36,7 @@ typedef struct {
 
 #define FLAG_PASSIVE  1
 #define FLAG_MEDIUM   2
+#define FLAG_SIGNALS  4
 
 extern void error_out(int socket, const char *msg);
 

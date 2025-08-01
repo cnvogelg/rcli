@@ -4,7 +4,9 @@ include $(SCRIPT_DIR)/define.mk
 
 CFLAGS += -Iinclude
 
-$(eval $(call def_bin,RCLID,rclid,init.c serv.c vcon.c timer.c shell.c sockio.c))
+RCLI_SRCS = init.c serv.c vcon.c timer.c shell.c sockio.c conv.c
+
+$(eval $(call def_bin,RCLID,rclid,$(RCLI_SRCS)))
 $(eval $(call def_bin,RUNSERV,runserv))
 $(eval $(call def_bin,TESTSHELL,testshell,shell.c))
 $(eval $(call def_bin,TESTVCON,testvcon,shell.c vcon.c timer.c))

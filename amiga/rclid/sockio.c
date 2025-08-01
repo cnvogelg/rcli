@@ -34,11 +34,13 @@ struct sockio_handle {
   ULONG             msg_mask;
   ULONG             timer_mask;
   ULONG             state;
+  UBYTE             *push_back_base;
   UBYTE             *push_back_buf;
   ULONG             push_back_size;
+  ULONG             push_back_max;
 };
 
-sockio_handle_t *sockio_init(int socket, struct MsgPort *user_port, ULONG max_msgs)
+sockio_handle_t *sockio_init(int socket, struct MsgPort *user_port, ULONG max_msgs, ULONG push_back_size)
 {
   sockio_handle_t *sio = (sockio_handle_t *)AllocVec(sizeof(sockio_handle_t), MEMF_ANY | MEMF_CLEAR);
   if(sio == NULL) {
@@ -49,6 +51,15 @@ sockio_handle_t *sockio_init(int socket, struct MsgPort *user_port, ULONG max_ms
   sio->user_port = user_port;
   sio->max_msgs = max_msgs;
   sio->state = SOCKIO_STATE_OK;
+
+  // alloc push back buffer
+  sio->push_back_max = push_back_size;
+  if(push_back_size > 0) {
+    sio->push_back_base = AllocVec(push_back_size, MEMF_ANY | MEMF_CLEAR);
+    if(sio->push_back_base == NULL) {
+      goto fail;
+    }
+  }
 
   NewList(&sio->free_list);
   NewList(&sio->recv_list);
@@ -200,6 +211,10 @@ void sockio_exit(sockio_handle_t *sio)
 
   if(sio->msg_port != NULL) {
     DeleteMsgPort(sio->msg_port);
+  }
+
+  if(sio->push_back_base != NULL) {
+    FreeVec(sio->push_back_buf);
   }
 
   FreeVec(sio);
@@ -488,16 +503,22 @@ void sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
         LOG(("sockio: RX DATA: new size=%ld\n", sio->rx_actual));
       }
       else {
-        LOG(("sockio: RX EOF!\n"));
-        sio->state = SOCKIO_STATE_EOF;
-        // remove from recv list
-        RemHead(&sio->recv_list);
-        // clear actual
-        sio->rx_actual = 0;
-        // return EOF
-        rx_buf->size = 0;
-        // reply message
-        ReplyMsg((struct Message *)rx_msg);
+        // got EOF and there are not enough bytes -> drop bytes and EOF
+        if(sio->rx_actual < rx_msg->min_size) {
+          LOG(("sockio: RX EOF!\n"));
+
+          sio->state = SOCKIO_STATE_EOF;
+          // remove from recv list
+          RemHead(&sio->recv_list);
+          // clear actual
+          sio->rx_actual = 0;
+          // return EOF
+          rx_buf->size = 0;
+          // reply message
+          ReplyMsg((struct Message *)rx_msg);
+        } else {
+          LOG(("sockio: RX EOF delay.\n"));
+        }
       }
     }
 
@@ -513,6 +534,7 @@ void sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
       // reply message
       ReplyMsg((struct Message *)rx_msg);
     }
+
   }
 
   // handle socket TX
@@ -562,11 +584,18 @@ void sockio_wait_handle(sockio_handle_t *sio, ULONG *sig_mask)
 }
 
 /* push some data back to receive buffer */
-void sockio_push_back(sockio_handle_t *sio, APTR buf, ULONG size)
+BOOL sockio_push_back(sockio_handle_t *sio, APTR buf, ULONG size)
 {
   LOG(("sockio: push back %ld bytes\n", size));
-  sio->push_back_buf = buf;
+  if(size > sio->push_back_max) {
+    LOG(("sockio: push back TOO large!\n"));
+    return FALSE;
+  }
+
+  sio->push_back_buf = sio->push_back_base;
   sio->push_back_size = size;
+  CopyMem(buf, sio->push_back_base, size);
+  return TRUE;
 }
 
 /* submit recv buffer and return msg (to wait for reply).
