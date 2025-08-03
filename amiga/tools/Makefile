@@ -6,8 +6,10 @@ CFLAGS += -Iinclude
 
 $(eval $(call def_bin,TPUT,tput,termio.c))
 $(eval $(call def_bin,TGET,tget,termio.c))
+$(eval $(call def_bin,TGET,tsig,))
 
 include $(SCRIPT_DIR)/rule.mk
 
 $(eval $(call add_bin,TPUT,tput))
 $(eval $(call add_bin,TGET,tget))
+$(eval $(call add_bin,TGET,tsig))

@@ -195,29 +195,36 @@ ULONG vcon_get_sigmask(vcon_handle_t *sh)
   return sh->pkt_sigmask | sh->vmsg_sigmask;
 }
 
-static void send_task_signal(struct MsgPort *port, ULONG sig_mask)
+static void send_task_signal(struct Task *task, ULONG sig_mask)
 {
-  struct Task *task = port->mp_SigTask;
-  LOG(("vcon: send signals %lx to task %lx\n", sig_mask, task));
   if(task != NULL) {
+    LOG(("vcon: send signals %lx to task %lx\n", sig_mask, task));
     Signal(task, sig_mask);
+  } else {
+    LOG(("vcon: can't send signal %lx\n", sig_mask));
   }
 }
 
 BOOL vcon_send_signal(vcon_handle_t *sh, ULONG sig_mask)
 {
-  struct MsgPort *port;
   BOOL sent = FALSE;
 
-  port = sh->read_signal_port;
-  if(port != NULL) {
-    send_task_signal(port, sig_mask);
-    sent = TRUE;
+  struct Task *rtask = NULL;
+  struct Task *wtask = NULL;
+
+  if(sh->read_signal_port != NULL) {
+    rtask = sh->read_signal_port->mp_SigTask;
+  }
+  if(sh->write_signal_port != NULL) {
+    wtask = sh->write_signal_port->mp_SigTask;
   }
 
-  port = sh->write_signal_port;
-  if(port != NULL) {
-    send_task_signal(port, sig_mask);
+  if(rtask != NULL) {
+    send_task_signal(rtask, sig_mask);
+    sent = TRUE;
+  }
+  if((wtask != NULL) && (wtask != rtask)) {
+    send_task_signal(wtask, sig_mask);
     sent = TRUE;
   }
 
@@ -394,9 +401,9 @@ static void handle_dos_pkt(vcon_handle_t *sh, struct Message *msg)
           res2 = ERROR_NO_FREE_STORE;
           sh->state = VCON_STATE_ERROR;
         }
-        /* implicitly set signal port to reader */
-        sh->read_signal_port = pkt->dp_Port;
       }
+      /* implicitly set signal port to reader */
+      sh->read_signal_port = pkt->dp_Port;
       break;
     }
     case ACTION_SEEK: {

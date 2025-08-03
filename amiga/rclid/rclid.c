@@ -344,8 +344,8 @@ static void process_signals_in_buffer(serv_data_t *sd, buf_t *buf)
     if(info.count[3] > 0) {
       sigmask |= SIGBREAKF_CTRL_F;
     }
-    LOG(("rclid: post sigmask %lx\n", sigmask));
-    vcon_send_signal(sd->vcon, sigmask);
+    BOOL ok = vcon_send_signal(sd->vcon, sigmask);
+    LOG(("rclid: post sigmask %lx -> ok=%ld\n", sigmask, (ULONG)ok));
   }
 }
 
@@ -391,14 +391,14 @@ static int handle_sockio_msg(serv_data_t *sd, sockio_msg_t *msg)
     /* if not EOF yet */
     if(vmsg->buffer.size > 0) {
 
-      /* process read buffer? */
-      if((sd->flags & FLAG_SIGNALS) == FLAG_SIGNALS) {
-        process_signals_in_buffer(sd, &vmsg->buffer);
-      }
-
       /* do we need to spit a line in cooked mode on line feed? */
       if(((sd->flags & FLAG_LINESPLIT) == FLAG_LINESPLIT) && (sd->buffer_mode == VCON_MODE_COOKED)) {
         line_split_buffer(sd, &vmsg->buffer);
+      }
+
+      /* process read buffer? */
+      if((sd->flags & FLAG_SIGNALS) == FLAG_SIGNALS) {
+        process_signals_in_buffer(sd, &vmsg->buffer);
       }
 
       /* if no more regular bytes are left after processing
