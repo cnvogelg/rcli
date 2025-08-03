@@ -30,13 +30,15 @@ typedef struct {
 
   ULONG flags;
 
+  UWORD buffer_mode;
   UBYTE csi_buf[4];
   UBYTE handshake_buf[HANDSHAKE_LEN];
 } serv_data_t;
 
-#define FLAG_PASSIVE  1
-#define FLAG_MEDIUM   2
-#define FLAG_SIGNALS  4
+#define FLAG_PASSIVE    1
+#define FLAG_MEDIUM     2
+#define FLAG_SIGNALS    4
+#define FLAG_LINESPLIT  8
 
 extern void error_out(int socket, const char *msg);
 

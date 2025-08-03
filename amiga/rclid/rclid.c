@@ -34,6 +34,7 @@ static const char *template = SERV_ARGS_TEMPLATE
   ",INIT_WAIT/K/N"
   ",CMD=COMMAND/K"
   ",NO_SIG=NO_SIGNALS/S"
+  ",NO_SPLIT/S"
   ",BUF_SIZE/K/N";
 
 // ReadArgs struct matching template
@@ -44,6 +45,7 @@ typedef struct {
   ULONG *init_wait;
   char *command;
   ULONG *no_signals;
+  ULONG *no_split;
   ULONG *buf_size;
 } params_t;
 
@@ -175,9 +177,12 @@ static int handle_buffer_mode(serv_data_t *sd, vcon_msg_t *vmsg, BOOL *reply)
   switch(mode) {
   case VCON_MODE_COOKED:
   case VCON_MODE_RAW:
+    sd->buffer_mode = mode;
     break;
   case VCON_MODE_MEDIUM:
     if(sd->flags & FLAG_MEDIUM) {
+      // accept medium mode
+      sd->buffer_mode = mode;
       break;
     } else {
       // set to unsupported
@@ -317,13 +322,13 @@ static int handle_vcon_msg(serv_data_t *sd, vcon_msg_t *vmsg, BOOL socket_active
   return result;
 }
 
-static void process_sock_incoming_buffer(serv_data_t *sd, vcon_msg_t *vmsg)
+static void process_signals_in_buffer(serv_data_t *sd, buf_t *buf)
 {
   signal_info_t info;
 
-  LOG(("rclid: begin process incoming sockio: size=%ld\n", vmsg->buffer.size));
-  ULONG changes = conv_extract_signals(&vmsg->buffer, &info);
-  LOG(("rclid: process sock incoming buffer: size=%ld changes=%ld\n", vmsg->buffer.size, changes));
+  LOG(("rclid: begin process signals in buffer: size=%ld\n", buf->size));
+  ULONG changes = conv_extract_signals(buf, &info);
+  LOG(("rclid: end process signals in buffer: size=%ld changes=%ld\n", buf->size, changes));
 
   if(changes > 0) {
     ULONG sigmask = 0;
@@ -341,6 +346,32 @@ static void process_sock_incoming_buffer(serv_data_t *sd, vcon_msg_t *vmsg)
     }
     LOG(("rclid: post sigmask %lx\n", sigmask));
     vcon_send_signal(sd->vcon, sigmask);
+  }
+}
+
+static void line_split_buffer(serv_data_t *sd, buf_t *buf)
+{
+  LONG i;
+
+  // check for new line
+  for(i=0;i<buf->size;i++) {
+    if(buf->data[i] == 0x0a) {
+      i++;
+      break;
+    }
+  }
+
+  // found a new line before end of buffer -> split
+  if(i < (buf->size-1)) {
+    LONG size = buf->size - i;
+    UBYTE *ptr = buf->data + i;
+    LOG(("rclid: line split at %ld of %ld - pushed %ld\n", i, buf->size, size));
+    if(!sockio_push_back(sd->sockio, ptr, size)) {
+      LOG(("rclid: push back in line split FAILED!!\n"));
+    }
+    buf->size = i;
+  } else {
+    LOG(("rclid: no line split\n"));
   }
 }
 
@@ -362,7 +393,12 @@ static int handle_sockio_msg(serv_data_t *sd, sockio_msg_t *msg)
 
       /* process read buffer? */
       if((sd->flags & FLAG_SIGNALS) == FLAG_SIGNALS) {
-        process_sock_incoming_buffer(sd, vmsg);
+        process_signals_in_buffer(sd, &vmsg->buffer);
+      }
+
+      /* do we need to spit a line in cooked mode on line feed? */
+      if(((sd->flags & FLAG_LINESPLIT) == FLAG_LINESPLIT) && (sd->buffer_mode == VCON_MODE_COOKED)) {
+        line_split_buffer(sd, &vmsg->buffer);
       }
 
       /* if no more regular bytes are left after processing
@@ -525,17 +561,23 @@ static void parse_options(params_t *params, serv_options_t *options)
     options->init_wait = 200; //ms
   }
 
-  if(params->no_signals != NULL) {
-    options->flags = 0;
-  } else {
-    // by default signal handling is on
-    options->flags = FLAG_SIGNALS;
-  }
-
   if(params->buf_size != NULL) {
     options->push_back_max = *params->buf_size;
   } else {
-    options->push_back_max = 256;
+    options->push_back_max = 1024;
+  }
+
+  // setup flags
+  options->flags = FLAG_SIGNALS | FLAG_LINESPLIT;
+
+  // disable signals
+  if(params->no_signals != NULL) {
+    options->flags &= ~FLAG_SIGNALS;
+  }
+
+  // disable line split
+  if(params->no_split != NULL) {
+    options->flags &= ~FLAG_LINESPLIT;
   }
 
   LOG(("rclid: options: stack_size=%lu, max_msgs=%lu, init_wait=%lu, pb_max=%lu\n",
