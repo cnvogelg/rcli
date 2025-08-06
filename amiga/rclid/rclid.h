@@ -10,6 +10,7 @@ typedef struct {
   ULONG  max_msgs;
   ULONG  init_wait;
   ULONG  push_back_max;
+  ULONG  tmp_buf_size;
   char   *command;
   ULONG  flags;
 } serv_options_t;
@@ -29,10 +30,13 @@ typedef struct {
   ULONG vcon_port_mask;
 
   ULONG flags;
+  ULONG tmp_rx_size;
+  ULONG tmp_tx_size;
 
   UWORD buffer_mode;
-  UBYTE csi_buf[4];
-  UBYTE handshake_buf[HANDSHAKE_LEN];
+
+  UBYTE *tmp_rx_buf;
+  UBYTE *tmp_tx_buf;
 } serv_data_t;
 
 #define FLAG_PASSIVE    1

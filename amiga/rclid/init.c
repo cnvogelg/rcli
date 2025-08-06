@@ -31,7 +31,7 @@ BOOL init_loop(serv_data_t *sd)
   BOOL ok = TRUE;
   BOOL stay = TRUE;
   sockio_msg_t *msg = NULL;
-  UBYTE *seq = sd->handshake_buf;
+  UBYTE *seq = sd->tmp_rx_buf;
 
   // from ms to us
   ULONG init_wait_us = sd->options->init_wait * 1000UL;

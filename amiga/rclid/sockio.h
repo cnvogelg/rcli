@@ -48,6 +48,9 @@ sockio_msg_t *sockio_wait_char(sockio_handle_t *sio, ULONG timeout_us);
 /* push some data back to receive buffer */
 BOOL sockio_push_back(sockio_handle_t *sio, APTR buf, ULONG size);
 
+/* replace buffer of current msg receive */
+BOOL sockio_replace_recv_buffer(sockio_handle_t *sio, sockio_msg_t *msg, APTR buf, ULONG max_size, ULONG min_size);
+
 /* free returned message */
 void sockio_free_msg(sockio_handle_t *sio, sockio_msg_t *msg);
 

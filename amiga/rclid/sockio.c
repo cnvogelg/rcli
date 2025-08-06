@@ -598,6 +598,65 @@ BOOL sockio_push_back(sockio_handle_t *sio, APTR buf, ULONG size)
   return TRUE;
 }
 
+/* replace buffer of current msg receive */
+BOOL sockio_replace_recv_buffer(sockio_handle_t *sio, sockio_msg_t *msg, APTR buf, ULONG max_size, ULONG min_size)
+{
+  LOG(("sockio: replace msg %lx buffer %lx max_size=%ld min_size=%ld", msg, buf, max_size, min_size));
+
+  UBYTE *old_buf = msg->buffer.data;
+
+  /* replace buffer */
+  msg->buffer.size = max_size;
+  msg->buffer.data = buf;
+  msg->min_size = min_size;
+
+  /* check if msg is current buffer? */
+  struct Node *rx_node = GetHead(&sio->recv_list);
+  if(rx_node != NULL) {
+    sockio_msg_t *rx_msg = (sockio_msg_t *)rx_node;
+    if(rx_msg == msg) {
+      /* how many bytes did we already got in the old buffer? */
+      ULONG rx_actual = sio->rx_actual;
+      UBYTE *new_buf = buf;
+
+      /* already too many bytes received? fill/complete new msg and push back remainder */
+      if(rx_actual > max_size) {
+        /* push back remainder */
+        ULONG remainder = rx_actual - max_size;
+        BOOL ok = sockio_push_back(sio, old_buf + max_size, remainder);
+        LOG(("sockio: replace: push back remainder: %ld bytes ok=%ld\n", remainder, ok));
+        if(!ok) {
+          return FALSE;
+        }
+
+        /* limit copy to max_size */
+        rx_actual = max_size;
+      }
+
+      /* copy actual bytes */
+      LOG(("sockio: replace: copy actual %ld\n", rx_actual));
+      CopyMem(old_buf, new_buf, rx_actual);
+
+      sio->rx_actual = rx_actual;
+
+      /* msg already done? */
+      if(rx_actual >= min_size) {
+        // store actual size
+        msg->buffer.size = rx_actual;
+        LOG(("sockio: replace: done reply: %lx size=%ld\n", msg, rx_actual));
+        // remove from recv list
+        RemHead(&sio->recv_list);
+        // clear actual
+        sio->rx_actual = 0;
+        // reply message
+        ReplyMsg((struct Message *)msg);
+      }
+    }
+  }
+
+  return TRUE;
+}
+
 /* submit recv buffer and return msg (to wait for reply).
    min_size allows to receive less data. 0=size */
 sockio_msg_t *sockio_recv(sockio_handle_t *sio, APTR buf, ULONG max_size, ULONG min_size)

@@ -65,6 +65,22 @@ static serv_data_t *init_rclid(int socket, serv_options_t *options)
     return NULL;
   }
 
+  // alloc temp rx buf for handshake and idle recv
+  sd->tmp_rx_size = options->tmp_buf_size;
+  sd->tmp_rx_buf = AllocVec(sd->tmp_rx_size, MEMF_CLEAR | MEMF_ANY);
+  if(sd->tmp_rx_buf == NULL) {
+    error_out(socket, "ERROR allocating tmp rx buffer!\n");
+    return NULL;
+  }
+
+  // alloc temp tx buf for output control seq
+  sd->tmp_tx_size = 8;
+  sd->tmp_tx_buf = AllocVec(sd->tmp_tx_size, MEMF_CLEAR | MEMF_ANY);
+  if(sd->tmp_tx_buf == NULL) {
+    error_out(socket, "ERROR allocating tmp rx buffer!\n");
+    return NULL;
+  }
+
   // keep options
   sd->options = options;
   // take over flags
@@ -160,6 +176,13 @@ static void exit_rclid(serv_data_t *sd)
     DeleteMsgPort(sd->vcon_port);
   }
 
+  if(sd->tmp_tx_buf != NULL) {
+    FreeVec(sd->tmp_tx_buf);
+  }
+  if(sd->tmp_rx_buf != NULL) {
+    FreeVec(sd->tmp_rx_buf);
+  }
+
   FreeVec(sd);
 }
 
@@ -201,7 +224,7 @@ static int handle_buffer_mode(serv_data_t *sd, vcon_msg_t *vmsg, BOOL *reply)
     LOG(("rclid: passive: ignore mode %ld\n", (LONG)mode));
   } else {
     // prepare our own CSI to report the buffer mode
-    UBYTE *buf = sd->csi_buf;
+    UBYTE *buf = sd->tmp_tx_buf;
     buf[0] = 0x9b; // CSI
     buf[1] = vmsg->buffer_mode + '0';
     buf[2] = 'V';
@@ -569,6 +592,9 @@ static void parse_options(params_t *params, serv_options_t *options)
 
   // setup flags
   options->flags = FLAG_SIGNALS | FLAG_LINESPLIT;
+
+  // tmp buf
+  options->tmp_buf_size = 256;
 
   // disable signals
   if(params->no_signals != NULL) {
