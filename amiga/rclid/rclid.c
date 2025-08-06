@@ -483,6 +483,19 @@ static int handle_sockio_msg(serv_data_t *sd, sockio_msg_t *msg)
   return result;
 }
 
+static BOOL is_sockio_idle(sockio_handle_t *sockio)
+{
+  // no recv, wait, or send msgs pending
+  if(sockio_first_recv(sockio) == NULL) {
+    if(sockio_first_wait(sockio) == NULL) {
+      if(sockio_first_send(sockio) == NULL) {
+        return TRUE;
+      }
+    }
+  }
+  return FALSE;
+}
+
 static void main_loop(serv_data_t *sd)
 {
   ULONG shell_mask = shell_exit_mask(sd->shell);
@@ -525,7 +538,7 @@ static void main_loop(serv_data_t *sd)
       }
 
       // still pending?
-      if(!sockio_has_pending(sd->sockio) && !vcon_active) {
+      if(is_sockio_idle(sd->sockio) && !vcon_active) {
         LOG(("rclid: sockio: no more pending -> inactive\n"));
         socket_active = FALSE;
       }
@@ -549,7 +562,7 @@ static void main_loop(serv_data_t *sd)
           vcon_active = FALSE;
           // is socketio still busy?
           if(socket_active) {
-            if(!sockio_has_pending(sd->sockio)) {
+            if(is_sockio_idle(sd->sockio)) {
               LOG(("rclid: sockio: no pending -> inactive\n"));
               socket_active = FALSE;
             } else {

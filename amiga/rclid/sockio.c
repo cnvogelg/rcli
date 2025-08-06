@@ -193,6 +193,21 @@ BOOL sockio_has_pending(sockio_handle_t *sio)
   return FALSE;
 }
 
+sockio_msg_t *sockio_first_recv(sockio_handle_t *sio)
+{
+  return (sockio_msg_t *)GetHead(&sio->recv_list);
+}
+
+sockio_msg_t *sockio_first_wait(sockio_handle_t *sio)
+{
+  return (sockio_msg_t *)GetHead(&sio->wait_list);
+}
+
+sockio_msg_t *sockio_first_send(sockio_handle_t *sio)
+{
+  return (sockio_msg_t *)GetHead(&sio->send_list);
+}
+
 void sockio_exit(sockio_handle_t *sio)
 {
   if(sio == NULL) {

@@ -66,4 +66,13 @@ void sockio_flush(sockio_handle_t *sio);
 /* has pending recv/wait/send msgs in transit */
 BOOL sockio_has_pending(sockio_handle_t *sio);
 
+/* get first recv msg (if any) */
+sockio_msg_t *sockio_first_recv(sockio_handle_t *sio);
+
+/* get first wait msg (if any) */
+sockio_msg_t *sockio_first_wait(sockio_handle_t *sio);
+
+/* get first send msg (if any) */
+sockio_msg_t *sockio_first_send(sockio_handle_t *sio);
+
 #endif
