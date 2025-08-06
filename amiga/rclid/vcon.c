@@ -210,19 +210,21 @@ BOOL vcon_send_signal(vcon_handle_t *sh, ULONG sig_mask)
   BOOL sent = FALSE;
 
   struct Task *rtask = NULL;
-  struct Task *wtask = NULL;
-
   if(sh->read_signal_port != NULL) {
+    LOG(("vcon: SEND signal to read msg_port %lx\n", sh->read_signal_port));
     rtask = sh->read_signal_port->mp_SigTask;
   }
-  if(sh->write_signal_port != NULL) {
-    wtask = sh->write_signal_port->mp_SigTask;
-  }
-
   if(rtask != NULL) {
     send_task_signal(rtask, sig_mask);
     sent = TRUE;
   }
+
+  struct Task *wtask = NULL;
+  if(sh->write_signal_port != NULL) {
+    LOG(("vcon: SEND signal to write msg_port %lx\n", sh->write_signal_port));
+    wtask = sh->write_signal_port->mp_SigTask;
+  }
+
   if((wtask != NULL) && (wtask != rtask)) {
     send_task_signal(wtask, sig_mask);
     sent = TRUE;
@@ -381,6 +383,7 @@ static void handle_dos_pkt(vcon_handle_t *sh, struct Message *msg)
       }
       /* implicitly set signal port to reader */
       sh->write_signal_port = pkt->dp_Port;
+      LOG(("vcon: WRITE signal msg_port %lx\n", pkt->dp_Port));
       break;
     }
     case ACTION_READ: {
@@ -404,6 +407,7 @@ static void handle_dos_pkt(vcon_handle_t *sh, struct Message *msg)
       }
       /* implicitly set signal port to reader */
       sh->read_signal_port = pkt->dp_Port;
+      LOG(("vcon: READ signal msg_port %lx\n", pkt->dp_Port));
       break;
     }
     case ACTION_SEEK: {
