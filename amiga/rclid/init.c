@@ -16,7 +16,7 @@
 #include "log.h"
 #include "sockio.h"
 #include "vcon.h"
-#include "shell.h"
+#include "run.h"
 #include "rclid.h"
 #include "init.h"
 

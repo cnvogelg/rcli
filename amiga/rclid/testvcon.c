@@ -7,7 +7,7 @@
 
 #include <string.h>
 
-#include "shell.h"
+#include "run.h"
 #include "vcon.h"
 
 #define ZERO 0
@@ -70,7 +70,7 @@ static BOOL handle_vmsg(vcon_msg_t *vmsg)
 
 int testvcon(void)
 {
-  shell_handle_t *sh;
+  run_handle_t *sh;
   vcon_handle_t *sc;
   struct MsgPort *vmsg_port;
   buf_t buffer;
@@ -91,8 +91,10 @@ int testvcon(void)
   }
 
   PutStr("test: Setup shell\n");
-  BPTR fh = vcon_create_fh(sc);
-  sh = shell_init(fh, ZERO, NULL, 8192);
+  BPTR fh_in = vcon_create_fh(sc);
+  BPTR fh_out = vcon_create_fh(sc);
+
+  sh = run_init(RUN_MODE_SHELL, fh_in, fh_out, NULL, 8192);
   if(sh == NULL) {
     PutStr("ERROR setting up shell...\n");
     vcon_exit(sc);
@@ -101,10 +103,10 @@ int testvcon(void)
   }
 
   PutStr("test: Main loop...\n");
-  ULONG shell_mask = shell_exit_mask(sh);
+  ULONG run_mask = run_exit_mask(sh);
   ULONG con_mask = vcon_get_sigmask(sc);
   ULONG vmsg_mask = 1 << vmsg_port->mp_SigBit;
-  ULONG masks = shell_mask | con_mask | vmsg_mask |
+  ULONG masks = run_mask | con_mask | vmsg_mask |
     SIGBREAKF_CTRL_C | SIGBREAKF_CTRL_D | SIGBREAKF_CTRL_E | SIGBREAKF_CTRL_F;
   int ctrl_c_count = 0;
 
@@ -134,8 +136,8 @@ int testvcon(void)
     }
 
     // shell reports end
-    if(got_mask & shell_mask) {
-      PutStr("test: shell signal!\n");
+    if(got_mask & run_mask) {
+      PutStr("test: run signal!\n");
     }
 
     // handle ctrl signals
@@ -168,7 +170,7 @@ int testvcon(void)
   }
 
   PutStr("test: Exit shell\n");
-  LONG rc = shell_exit(sh);
+  LONG rc = run_exit(sh);
   Printf("test: done rc=%ld\n", rc);
 
   PutStr("test: vcon exit\n");

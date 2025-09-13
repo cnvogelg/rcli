@@ -16,7 +16,7 @@
 #include "log.h"
 #include "serv.h"
 #include "vcon.h"
-#include "shell.h"
+#include "run.h"
 #include "sockio.h"
 #include "rclid.h"
 #include "init.h"
@@ -116,7 +116,7 @@ static serv_data_t *init_rclid(int socket, serv_options_t *options)
   return sd;
 }
 
-static BOOL start_shell(serv_data_t *sd)
+static BOOL run_command(serv_data_t *sd)
 {
   serv_options_t *opts = sd->options;
 
@@ -136,14 +136,17 @@ static BOOL start_shell(serv_data_t *sd)
   }
   sd->vcon = vcon;
 
-  // create shell and use console
-  BPTR fh = vcon_create_fh(vcon);
-  shell_handle_t *sh = shell_init(fh, ZERO, NULL, opts->stack_size);
-  if(sh == NULL) {
-    error_out(sd->socket, "ERROR opening shell!\n");
+  // create in/out handles from vcon
+  BPTR fh_in = vcon_create_fh(vcon);
+  BPTR fh_out = vcon_create_fh(vcon);
+
+  // run command/shell and use console
+  run_handle_t *run = run_init(RUN_MODE_SHELL, fh_in, fh_out, NULL, opts->stack_size);
+  if(run == NULL) {
+    error_out(sd->socket, "ERROR init run!\n");
     return FALSE;
   }
-  sd->shell = sh;
+  sd->run = run;
 
   return TRUE;
 }
@@ -162,9 +165,9 @@ static void exit_rclid(serv_data_t *sd)
     DeleteMsgPort(sd->sockio_port);
   }
 
-  if(sd->shell != NULL) {
-    BYTE result = shell_exit(sd->shell);
-    LOG(("rclid: shell result %ld\n", (LONG)result));
+  if(sd->run != NULL) {
+    BYTE result = run_exit(sd->run);
+    LOG(("rclid: run result %ld\n", (LONG)result));
   }
 
   if(sd->vcon != NULL) {
@@ -498,11 +501,11 @@ static BOOL is_sockio_idle(sockio_handle_t *sockio)
 
 static void main_loop(serv_data_t *sd)
 {
-  ULONG shell_mask = shell_exit_mask(sd->shell);
+  ULONG run_mask = run_exit_mask(sd->run);
   ULONG vcon_mask = vcon_get_sigmask(sd->vcon);
   ULONG vport_mask = sd->vcon_port_mask;
   ULONG sport_mask = sd->sockio_port_mask;
-  ULONG masks = shell_mask | vcon_mask | vport_mask | sport_mask | SIGBREAKF_CTRL_C;
+  ULONG masks = run_mask | vcon_mask | vport_mask | sport_mask | SIGBREAKF_CTRL_C;
   BOOL socket_active = TRUE;
   BOOL vcon_active = TRUE;
 
@@ -573,6 +576,10 @@ static void main_loop(serv_data_t *sd)
       }
     }
 
+    // if run is done the close vcon streams
+    if(run_mask & sig_mask) {
+      LOG(("rclid: run done signal!\n"));
+    }
   }
   LOG(("rclid: leave main\n"));
 }
@@ -642,10 +649,10 @@ int main(void)
   serv_data_t *sd = init_rclid(socket, &options);
   if(sd != NULL) {
     if(init_loop(sd)) {
-      if(start_shell(sd)) {
+      if(run_command(sd)) {
         main_loop(sd);
       } else {
-        error_out(sd->socket, "Error starting shell!\n");
+        error_out(sd->socket, "Error starting command!\n");
       }
     }
   }

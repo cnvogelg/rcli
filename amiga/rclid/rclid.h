@@ -20,7 +20,7 @@ typedef struct {
   serv_options_t  *options;
 
   vcon_handle_t   *vcon;
-  shell_handle_t  *shell;
+  run_handle_t    *run;
   sockio_handle_t *sockio;
 
   struct MsgPort  *sockio_port;
