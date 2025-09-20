@@ -47,22 +47,22 @@ static ASM SAVEDS int start_proc(REG(a0, char *arg_str), REG(d0, long arg_len))
     return 1;
   }
 
-  Printf("RUN RUN %s\n", run->run_cmd);
-
   // run our command
   BOOL ok;
   if(run->mode == RUN_MODE_SHELL) {
+    Printf("RUN SHELL %s\n", run->run_cmd);
     LONG result = Execute(run->run_cmd, run->fh_in, run->fh_out);
+    Printf("RUN DONE SHELL=%ld\n", result);
     ok = (result == DOSTRUE);
   } else {
+    Printf("RUN COMMAND %s\n", run->run_cmd);
     LONG result = SystemTags(run->run_cmd,
       SYS_Input, run->fh_in,
       SYS_Output, run->fh_out,
       TAG_DONE);
+    Printf("RUN DONE COMMAND %ld\n", result);
     ok = (result != -1);
   }
-
-  Printf("RUN DONE=%ld\n", ok);
 
   // close streams (and signal vcon)
   Close(run->fh_in);

@@ -19,125 +19,82 @@
 #include "run.h"
 #include "rclid.h"
 #include "init.h"
+#include "line.h"
 
 #define INIT_STATE_WAIT   0
 #define INIT_STATE_RECV   1
 #define INIT_STATE_SEND   2
 
-BOOL init_loop(serv_data_t *sd)
+const char *special_chars = "#;";
+
+BOOL init_handshake(serv_data_t *sd)
 {
-  LOG(("rclid: init begin\n"));
-  int state = INIT_STATE_WAIT;
-  BOOL ok = TRUE;
-  BOOL stay = TRUE;
-  sockio_msg_t *msg = NULL;
-  UBYTE *seq = sd->tmp_rx_buf;
+  // how long shall we wait for a first char?
+  ULONG wait_ms = sd->options->init_wait;
 
-  // from ms to us
-  ULONG init_wait_us = sd->options->init_wait * 1000UL;
+  LOG(("rclid: init handshake begin. wait=%lu\n", wait_ms));
 
-  // start wait
-  msg = sockio_wait_char(sd->sockio, init_wait_us);
-  if(msg == NULL) {
-    error_out(sd->socket, "Error waiting!");
+  // try to get a first command char
+  int check_result = line_check_char(sd->sockio, sd->sockio_port, special_chars, wait_ms);
+  if(check_result == LINE_RET_ERROR) {
+    // error happened
+    LOG(("rclid: init check char returned ERROR!"));
+    return FALSE;
+  }
+  else if(check_result == LINE_RET_TIMEOUT) {
+    // timeout -> drops into shell
+    LOG(("rclid: timeout -> auto drop into shell!"));
+    sd->mode = RCLI_MODE_SHELL;
+    return TRUE;
+  }
+  else if(check_result == LINE_RET_OK) {
+    // non special char -> drop into command mode
+    LOG(("rclid: no special char -> auto drop into command!\n"));
+    sd->mode = RCLI_MODE_COMMAND;
+  }
+  // check for command char
+  else if(check_result == '#') {
+    // shell mode!
+    LOG(("rclid: picked shell mode\n"));
+    sd->mode = RCLI_MODE_SHELL;
+  }
+  else if(check_result == ';') {
+    // command mode
+    LOG(("rclid: picked command mode\n"));
+    sd->mode = RCLI_MODE_COMMAND;
+  }
+  else {
+    LOG(("rclid: invalid mode?!\n"));
     return FALSE;
   }
 
-  // init loop
-  while(stay) {
-    ULONG mask = sd->sockio_port_mask;
-    sockio_wait_handle(sd->sockio, &mask);
-    if(mask & sd->sockio_port_mask) {
-      struct Message *raw_msg;
-      while((raw_msg = GetMsg(sd->sockio_port)) != NULL) {
-        sockio_msg_t *smsg = (sockio_msg_t *)raw_msg;
-        ULONG type = smsg->type;
-        LOG(("rclid: got init sockio msg: %ld\n", type));
-        switch(type) {
-        case SOCKIO_MSG_WAIT_CHAR:
-          // got char
-          if(smsg->buffer.size == 1) {
-            // epxect init handshake "CLIx"
-            seq[4] = 0;
-            // allow at least 1 byte
-            msg = sockio_recv(sd->sockio, seq, HANDSHAKE_LEN, 1);
-            if(msg == NULL) {
-              LOG(("rclid: init recv ERROR!\n"));
-              stay = FALSE;
-              ok = FALSE;
-            }
-            state = INIT_STATE_RECV;
-          } else {
-            // no char
-            stay = FALSE;
-            sd->flags |= FLAG_PASSIVE;
-            LOG(("rclid: no char -> passive!\n"));
-          }
-          break;
-        case SOCKIO_MSG_RECV: {
-          ULONG size = smsg->buffer.size;
-          LOG(("rclid: init got handshake: size=%ld %s\n", size, seq));
-          if((size < HANDSHAKE_LEN) || (strncmp(seq, HANDSHAKE_STR, HANDSHAKE_LEN - 1)!=0)) {
-            LOG(("rclid: wrong handshake -> passive!\n"));
-            stay = FALSE;
-            sd->flags |= FLAG_PASSIVE;
-            // push back data so it won't get lost
-            if(!sockio_push_back(sd->sockio, seq, size)) {
-              LOG(("rclid: failed push back!\n"));
-              stay = FALSE;
-              ok = FALSE;
-            }
-          } else {
-            // CLIx: handshake with flags number
-            // x =  0 no flags
-            // x |= 1 medium mode
-            // x |= 2 signals
-            UBYTE flags = seq[3];
-            // make sure flags are number
-            if((flags < '0') || (flags > '9')) {
-              LOG(("rclid: init send wrong flags ERROR!\n"));
-              stay = FALSE;
-              ok = FALSE;
-            } else {
-              LOG(("rclid: got flags %x\n", flags));
-              flags -= '0';
-              sd->flags = 0;
-              if(flags & 1) {
-                sd->flags |= FLAG_MEDIUM;
-              }
-              if(flags & 2) {
-                sd->flags |= FLAG_SIGNALS;
-              }
-              // handshake ok: echo handshake back
-              msg = sockio_send(sd->sockio, seq, HANDSHAKE_LEN);
-              if(msg == NULL) {
-                LOG(("rclid: init send ERROR!\n"));
-                stay = FALSE;
-                ok = FALSE;
-              }
-              state = INIT_STATE_SEND;
-            }
-          }
-          break;
-        }
-        case SOCKIO_MSG_SEND:
-          LOG(("rclid: init sent handshake\n"));
-          stay = FALSE;
-          break;
-        case SOCKIO_MSG_ERROR:
-          stay = FALSE;
-          ok = FALSE;
-          LOG(("rclid: init sockio ERROR\n"));
-          break;
-        default:
-          LOG(("rclid: invalid init sockio msg!\n"));
-          break;
-        }
-        sockio_free_msg(sd->sockio, smsg);
-      }
-    }
+  // we got a command char. now get a full line until new line afterwards
+  ULONG arg_len = sd->options->arg_len;
+  LOG(("rclid: read arg line. len=%ld\n", arg_len));
+  sd->arg_line = AllocVec(arg_len, MEMF_CLEAR | MEMF_ANY);
+  if(sd->arg_line == NULL) {
+    LOG(("rclid: no mem for arg line!\n"));
+    return FALSE;
+  }  
+
+  // now read line
+  int read_result = line_read_line(sd->sockio, sd->sockio_port, sd->arg_line, arg_len, wait_ms);
+
+  // error or time out aborts session
+  if(read_result < 0) {
+    LOG(("rclid: read line error or timeout!\n"));
+    return FALSE;
   }
 
-  LOG(("rclid: init done\n"));
-  return ok;
+  // if nor char was read then assume arg line is default/null
+  if(read_result == 0) {
+    FreeVec(sd->arg_line);
+    sd->arg_line = NULL; 
+    sd->arg_len = 0;
+  } else {
+    sd->arg_len = read_result;
+  }
+
+  LOG(("rclid: init done: arg len=%ld line='%s'\n", sd->arg_len, sd->arg_line));
+  return TRUE;
 }

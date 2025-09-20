@@ -1,17 +1,15 @@
 #ifndef RCLID_H
 #define RCLID_H
 
-#define HANDSHAKE_LEN     4
-#define HANDSHAKE_STR     "CLI0"
-
 // final options
 typedef struct {
   ULONG  stack_size;
   ULONG  max_msgs;
   ULONG  init_wait;
   ULONG  push_back_max;
-  ULONG  tmp_buf_size;
-  char   *command;
+  ULONG  arg_len;
+  char   *def_command;
+  char   *def_shell_cmd;
   ULONG  flags;
 } serv_options_t;
 
@@ -29,20 +27,29 @@ typedef struct {
   ULONG sockio_port_mask;
   ULONG vcon_port_mask;
 
-  ULONG flags;
-  ULONG tmp_rx_size;
   ULONG tmp_tx_size;
-
-  UWORD buffer_mode;
-
-  UBYTE *tmp_rx_buf;
   UBYTE *tmp_tx_buf;
+
+  // optional arg line passed in by client
+  BYTE  *arg_line;
+  ULONG  arg_len;
+
+  // keep state of buffer/screen mode
+  UBYTE buffer_mode;
+  // mode of rcli: shell or command
+  UBYTE mode;
+  // flags in mode
+  UBYTE flags;
+
 } serv_data_t;
 
-#define FLAG_PASSIVE    1
-#define FLAG_MEDIUM     2
-#define FLAG_SIGNALS    4
-#define FLAG_LINESPLIT  8
+#define RCLI_MODE_SHELL   0
+#define RCLI_MODE_COMMAND 1
+
+#define RCLI_FLAG_PARSE_SIGNALS   1
+#define RCLI_FLAG_SPLIT_LINES     2
+#define RCLI_FLAG_DO_MEDIUM_MODE  4
+#define RCLI_FLAG_SEND_MODE       8
 
 extern void error_out(int socket, const char *msg);
 

@@ -32,10 +32,12 @@ static const char *template = SERV_ARGS_TEMPLATE
   ",STACK_SIZE/K/N"
   ",MAX_MSGS/K/N"
   ",INIT_WAIT/K/N"
-  ",CMD=COMMAND/K"
+  ",CMD=DEF_COMMAND/K"
+  ",DEF_SHELL_CMD/K"
   ",NO_SIG=NO_SIGNALS/S"
   ",NO_SPLIT/S"
-  ",BUF_SIZE/K/N";
+  ",ARG_LEN/K/N"
+  ",PUSH_BACK_SIZE/K/N";
 
 // ReadArgs struct matching template
 typedef struct {
@@ -43,10 +45,12 @@ typedef struct {
   ULONG *stack_size;
   ULONG *max_msgs;
   ULONG *init_wait;
-  char *command;
+  char *def_command;
+  char *def_shell_cmd;
   ULONG *no_signals;
   ULONG *no_split;
-  ULONG *buf_size;
+  ULONG *arg_len;
+  ULONG *push_back_size;
 } params_t;
 
 void error_out(int socket, const char *msg)
@@ -65,14 +69,6 @@ static serv_data_t *init_rclid(int socket, serv_options_t *options)
     return NULL;
   }
 
-  // alloc temp rx buf for handshake and idle recv
-  sd->tmp_rx_size = options->tmp_buf_size;
-  sd->tmp_rx_buf = AllocVec(sd->tmp_rx_size, MEMF_CLEAR | MEMF_ANY);
-  if(sd->tmp_rx_buf == NULL) {
-    error_out(socket, "ERROR allocating tmp rx buffer!\n");
-    return NULL;
-  }
-
   // alloc temp tx buf for output control seq
   sd->tmp_tx_size = 8;
   sd->tmp_tx_buf = AllocVec(sd->tmp_tx_size, MEMF_CLEAR | MEMF_ANY);
@@ -85,6 +81,8 @@ static serv_data_t *init_rclid(int socket, serv_options_t *options)
   sd->options = options;
   // take over flags
   sd->flags = options->flags;
+  // prepare default mode
+  sd->mode = RCLI_MODE_SHELL;
   LOG(("rclid: init. flags=%lx\n", sd->flags));
 
   // set socket lib options
@@ -128,7 +126,7 @@ static BOOL run_command(serv_data_t *sd)
   }
   sd->vcon_port_mask = 1 << sd->vcon_port->mp_SigBit;
 
-  // setup virtual console for this sesion
+  // setup virtual console for this session
   vcon_handle_t *vcon = vcon_init(sd->vcon_port, opts->max_msgs);
   if(vcon == NULL) {
     error_out(sd->socket, "ERROR opening virtual console!\n");
@@ -140,8 +138,22 @@ static BOOL run_command(serv_data_t *sd)
   BPTR fh_in = vcon_create_fh(vcon);
   BPTR fh_out = vcon_create_fh(vcon);
 
+  int run_mode = (sd->mode == RCLI_MODE_SHELL) ? RUN_MODE_SHELL : RUN_MODE_COMMAND;
+
+  // first use clien supplied args
+  UBYTE *args = sd->arg_line;
+  if(args == NULL) {
+    // or use default given by server
+    if(sd->mode == RCLI_MODE_SHELL) {
+      args = sd->options->def_shell_cmd;
+    } else {
+      args = sd->options->def_command;
+    }
+  }
+
   // run command/shell and use console
-  run_handle_t *run = run_init(RUN_MODE_SHELL, fh_in, fh_out, NULL, opts->stack_size);
+  LOG(("rclid: run command mode=%ld stack=%ld args=%s\n", run_mode, opts->stack_size, args));
+  run_handle_t *run = run_init(run_mode, fh_in, fh_out, args, opts->stack_size);
   if(run == NULL) {
     error_out(sd->socket, "ERROR init run!\n");
     return FALSE;
@@ -182,8 +194,9 @@ static void exit_rclid(serv_data_t *sd)
   if(sd->tmp_tx_buf != NULL) {
     FreeVec(sd->tmp_tx_buf);
   }
-  if(sd->tmp_rx_buf != NULL) {
-    FreeVec(sd->tmp_rx_buf);
+
+  if(sd->arg_line != NULL) {
+    FreeVec(sd->arg_line);
   }
 
   FreeVec(sd);
@@ -206,7 +219,7 @@ static int handle_buffer_mode(serv_data_t *sd, vcon_msg_t *vmsg, BOOL *reply)
     sd->buffer_mode = mode;
     break;
   case VCON_MODE_MEDIUM:
-    if(sd->flags & FLAG_MEDIUM) {
+    if(sd->flags & RCLI_FLAG_DO_MEDIUM_MODE) {
       // accept medium mode
       sd->buffer_mode = mode;
       break;
@@ -223,7 +236,7 @@ static int handle_buffer_mode(serv_data_t *sd, vcon_msg_t *vmsg, BOOL *reply)
   }
 
   // in passive mode reply mode request directly
-  if(sd->flags & FLAG_PASSIVE) {
+  if(sd->flags & RCLI_FLAG_SEND_MODE) {
     LOG(("rclid: passive: ignore mode %ld\n", (LONG)mode));
   } else {
     // prepare our own CSI to report the buffer mode
@@ -418,12 +431,12 @@ static int handle_sockio_msg(serv_data_t *sd, sockio_msg_t *msg)
     if(vmsg->buffer.size > 0) {
 
       /* do we need to spit a line in cooked mode on line feed? */
-      if(((sd->flags & FLAG_LINESPLIT) == FLAG_LINESPLIT) && (sd->buffer_mode == VCON_MODE_COOKED)) {
+      if(((sd->flags & RCLI_FLAG_SPLIT_LINES) == RCLI_FLAG_SPLIT_LINES) && (sd->buffer_mode == VCON_MODE_COOKED)) {
         line_split_buffer(sd, &vmsg->buffer);
       }
 
       /* process read buffer? */
-      if((sd->flags & FLAG_SIGNALS) == FLAG_SIGNALS) {
+      if((sd->flags & RCLI_FLAG_PARSE_SIGNALS) == RCLI_FLAG_PARSE_SIGNALS) {
         process_signals_in_buffer(sd, &vmsg->buffer);
       }
 
@@ -604,26 +617,37 @@ static void parse_options(params_t *params, serv_options_t *options)
     options->init_wait = 200; //ms
   }
 
-  if(params->buf_size != NULL) {
-    options->push_back_max = *params->buf_size;
+  if(params->def_command != NULL) {
+    options->def_command = params->def_command;
+  }
+
+  if(params->def_shell_cmd != NULL) {
+    options->def_shell_cmd = params->def_shell_cmd;
+  }
+
+  if(params->arg_len != NULL) {
+    options->arg_len = *params->arg_len;
+  } else {
+    options->arg_len = 256;
+  }
+
+  if(params->push_back_size != NULL) {
+    options->push_back_max = *params->push_back_size;
   } else {
     options->push_back_max = 1024;
   }
 
   // setup flags
-  options->flags = FLAG_SIGNALS | FLAG_LINESPLIT;
-
-  // tmp buf
-  options->tmp_buf_size = 256;
+  options->flags = RCLI_FLAG_PARSE_SIGNALS | RCLI_FLAG_SPLIT_LINES;
 
   // disable signals
   if(params->no_signals != NULL) {
-    options->flags &= ~FLAG_SIGNALS;
+    options->flags &= ~RCLI_FLAG_PARSE_SIGNALS;
   }
 
   // disable line split
   if(params->no_split != NULL) {
-    options->flags &= ~FLAG_LINESPLIT;
+    options->flags &= ~RCLI_FLAG_SPLIT_LINES;
   }
 
   LOG(("rclid: options: stack_size=%lu, max_msgs=%lu, init_wait=%lu, pb_max=%lu\n",
@@ -648,7 +672,7 @@ int main(void)
 
   serv_data_t *sd = init_rclid(socket, &options);
   if(sd != NULL) {
-    if(init_loop(sd)) {
+    if(init_handshake(sd)) {
       if(run_command(sd)) {
         main_loop(sd);
       } else {
