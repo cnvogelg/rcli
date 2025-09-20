@@ -312,9 +312,9 @@ static void handle_timer(sockio_handle_t *sio)
   }
 }
 
-static int handle_push_back(sockio_handle_t *sio, sockio_msg_t *rx_msg)
+static BOOL handle_push_back(sockio_handle_t *sio, sockio_msg_t *rx_msg)
 {
-  int done = 0;
+  BOOL done = 0;
   ULONG push_size = sio->push_back_size;
   APTR  push_buf = sio->push_back_buf;
 
@@ -349,7 +349,7 @@ static int handle_push_back(sockio_handle_t *sio, sockio_msg_t *rx_msg)
     // reply message
     ReplyMsg((struct Message *)rx_msg);
 
-    done = 1;
+    done = TRUE;
   }
 
   return done;
